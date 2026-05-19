@@ -346,7 +346,11 @@ def read_token(path):
         return f.read().strip()
 
 def gh_headers(token):
-    return {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
 
 def jira_auth_headers(email, token):
     creds = base64.b64encode(f"{email}:{token}".encode()).decode()
@@ -2230,6 +2234,7 @@ class SqlFilePopup(tk.Toplevel):
                 inc=tk.BooleanVar(value=(status != "removed")),
                 cmt_var=tk.StringVar(value=obj_name),
                 raw_url=f.get("raw_url", ""),
+                contents_url=f.get("contents_url", ""),
                 full_content=f.get("full_content"),
                 gh_url=f.get("blob_url") or f.get("html_url", ""),
             ))
@@ -2368,20 +2373,57 @@ class SqlFilePopup(tk.Toplevel):
         if p:
             self._out_var.set(p)
 
-    def _fetch_content(self, raw_url):
-        if not raw_url:
-            return None
-        try:
-            tok_file = self._cfg.get("github_token_file", "")
-            token = ""
-            if tok_file and os.path.exists(tok_file):
-                with open(tok_file) as fh:
-                    token = fh.read().strip()
-            headers = {"Authorization": f"token {token}"} if token else {}
-            r = requests.get(raw_url, headers=headers, timeout=15)
-            return r.text if r.ok else None
-        except Exception:
-            return None
+    def _read_token(self):
+        tok_file = self._cfg.get("github_token_file", "")
+        if tok_file and os.path.exists(tok_file):
+            with open(tok_file) as fh:
+                return fh.read().strip()
+        return ""
+
+    def _gh_headers(self, token):
+        if not token:
+            return {"Accept": "application/vnd.github+json"}
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+    def _fetch_content(self, raw_url, contents_url=""):
+        """Fetch full file content. Tries raw_url first, falls back to Contents API."""
+        token = self._read_token()
+        hdrs  = self._gh_headers(token)
+
+        # 1. raw_url (raw.githubusercontent.com)
+        if raw_url:
+            try:
+                r = requests.get(raw_url, headers=hdrs, timeout=15)
+                if r.ok:
+                    return r.text, None
+                raw_err = f"raw_url HTTP {r.status_code}"
+            except Exception as e:
+                raw_err = str(e)
+        else:
+            raw_err = "no raw_url"
+
+        # 2. Contents API fallback (base64-encoded response)
+        if contents_url:
+            try:
+                # Strip query params if any, then add ref from raw_url SHA if possible
+                api_url = contents_url.split("?")[0]
+                r2 = requests.get(api_url, headers=hdrs, timeout=15)
+                if r2.ok:
+                    data = r2.json()
+                    if isinstance(data, dict) and data.get("encoding") == "base64":
+                        content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+                        return content, None
+                    raw_err += f" | contents API unexpected format"
+                else:
+                    raw_err += f" | contents API HTTP {r2.status_code}: {r2.text[:120]}"
+            except Exception as e:
+                raw_err += f" | contents API error: {e}"
+
+        return None, raw_err
 
     def _generate(self):
         included = [r for r in self._rows if r["inc"].get()]
@@ -2425,22 +2467,25 @@ class SqlFilePopup(tk.Toplevel):
             blk.append("")
 
             content = None
+            fetch_err = None
 
-            # 1. raw_url → full file from GitHub (real production use)
-            if r.get("raw_url"):
-                content = self._fetch_content(r["raw_url"])
-
-            # 2. pre-provided full content (mock data / offline)
-            if content is None and r.get("full_content"):
+            # 1. pre-provided full content (mock / offline)
+            if r.get("full_content"):
                 content = r["full_content"]
 
-            # 3. added files only — reconstruct from patch + lines
+            # 2. GitHub fetch — raw_url first, Contents API fallback
+            if content is None:
+                content, fetch_err = self._fetch_content(
+                    r.get("raw_url", ""), r.get("contents_url", ""))
+
+            # 3. added files only — reconstruct from patch lines (no auth needed)
             if content is None:
                 patch = r.get("patch", "")
                 if patch and status == "added":
                     content = "\n".join(
                         l[1:] for l in patch.splitlines()
                         if l.startswith('+') and not l.startswith('+++'))
+                    fetch_err = None  # successfully reconstructed
 
             if content:
                 lines = content.rstrip().splitlines()
@@ -2448,8 +2493,10 @@ class SqlFilePopup(tk.Toplevel):
                     lines.pop()
                 blk.append("\n".join(lines).rstrip())
             else:
-                blk.append(f"-- *** CONTENT UNAVAILABLE for {fname}")
-                blk.append(f"-- *** Configure GitHub token or provide raw_url to fetch full file.")
+                blk.append(f"-- *** CONTENT UNAVAILABLE: {fname}")
+                if fetch_err:
+                    blk.append(f"-- *** Fetch error: {fetch_err}")
+                blk.append("-- *** Fix: ensure GitHub token is set in Settings and has 'repo' scope.")
 
             blk.append("")
             blk.append("")
