@@ -1,0 +1,12 @@
+{
+  "number": 42,
+  "title": "feat: user authentication overhaul",
+  "state": "open",
+  "html_url": "https://github.com/dummyorg/dummyrepo/pull/42",
+  "user": { "login": "john.doe" },
+  "created_at": "2026-05-15T09:00:00Z",
+  "updated_at": "2026-05-19T14:30:00Z",
+  "head": { "ref": "feature/auth-overhaul" },
+  "base": { "ref": "main" },
+  "body": "This PR refactors the authentication layer.\n\n## Changes\n- New JWT config\n- Updated user model\n- Shared auth helpers\n- Auth service rewrite\n- Login controller update\n- Unit tests"
+}

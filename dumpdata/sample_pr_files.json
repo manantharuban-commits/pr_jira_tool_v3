@@ -1,0 +1,56 @@
+[
+  {
+    "filename": "src/controllers/login_controller.py",
+    "status": "modified",
+    "additions": 45,
+    "deletions": 12
+  },
+  {
+    "filename": "src/services/auth_service.py",
+    "status": "modified",
+    "additions": 88,
+    "deletions": 33
+  },
+  {
+    "filename": "src/config/jwt_config.py",
+    "status": "added",
+    "additions": 30,
+    "deletions": 0
+  },
+  {
+    "filename": "tests/test_auth_service.py",
+    "status": "added",
+    "additions": 65,
+    "deletions": 0
+  },
+  {
+    "filename": "src/models/user_model.py",
+    "status": "modified",
+    "additions": 18,
+    "deletions": 5
+  },
+  {
+    "filename": "src/utils/auth_helpers.py",
+    "status": "added",
+    "additions": 40,
+    "deletions": 0
+  },
+  {
+    "filename": "src/constants/auth_constants.py",
+    "status": "added",
+    "additions": 15,
+    "deletions": 0
+  },
+  {
+    "filename": "src/routes/auth_routes.py",
+    "status": "modified",
+    "additions": 10,
+    "deletions": 3
+  },
+  {
+    "filename": "README.md",
+    "status": "modified",
+    "additions": 8,
+    "deletions": 2
+  }
+]

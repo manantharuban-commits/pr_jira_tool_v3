@@ -1,0 +1,11 @@
+{
+  "owner": "John Doe",
+  "environment": "Production",
+  "issue_type": "Bug",
+  "dependency": "Yes",
+  "git_link": "https://github.com/dummyorg/dummyrepo/pull/42",
+  "doc_name": "dump_test_report",
+  "summary": "[Bug] feat: user authentication overhaul",
+  "priority": "High",
+  "description": "Authentication service fails when JWT token expires mid-session. Users are being logged out unexpectedly. Root cause traced to missing token refresh logic in auth_service.py."
+}
