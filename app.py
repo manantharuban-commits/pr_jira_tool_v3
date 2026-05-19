@@ -256,6 +256,118 @@ def jira_auth_headers(email, token):
             "Content-Type": "application/json", "Accept": "application/json"}
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  SQL helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_sql_object(filename, patch):
+    """Return a short label like 'TABLE users' or 'VIEW active_orders' from
+    the patch/filename.  Used as the default step comment in the SQL popup."""
+    # Gather added/changed lines from patch (first 60) for detection
+    search = ""
+    if patch:
+        added = [l[1:] for l in patch.splitlines()
+                 if l.startswith('+') and not l.startswith('+++')]
+        search = "\n".join(added[:60])
+    if not search:
+        search = os.path.basename(filename)
+
+    DDL = (r'(CREATE|ALTER|DROP)\s+(?:OR\s+REPLACE\s+)?(?:FORCE\s+)?'
+           r'(?:EDITIONABLE\s+)?'
+           r'(TABLE|VIEW|PROCEDURE|PROC|FUNCTION|TRIGGER|PACKAGE|SEQUENCE|'
+           r'TYPE|INDEX|SCHEMA)\s+(?:\w+\.)?(\w+)')
+    m = re.search(DDL, search, re.IGNORECASE | re.MULTILINE)
+    if m:
+        return f"{m.group(2).upper()} {m.group(3)}"
+
+    DML = r'(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:\w+\.)?(\w+)'
+    m = re.search(DML, search, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    base = os.path.splitext(os.path.basename(filename))[0]
+    base = re.sub(r'^\d+[_\-]+', '', base)   # strip leading "01_"
+    return base
+
+
+def _ensure_semicolon(sql):
+    """Ensure the last non-empty, non-comment line ends with ';'."""
+    lines = sql.rstrip().splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        s = lines[i].strip()
+        if s and not s.startswith('--') and not s.startswith('/*') and s != '*':
+            if not s.endswith(';'):
+                lines[i] = lines[i].rstrip() + ';'
+            break
+    return '\n'.join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  GitHub-style diff renderer for Word docs
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _word_diff_block(doc, patch, status, adds, dels):
+    """Render file changes as a shaded GitHub-style diff block in a Word doc."""
+
+    def _sp(text, bg_hex, fg_rgb, bold=False):
+        p = doc.add_paragraph(style="Normal")
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after  = Pt(0)
+        pPr = p._p.get_or_add_pPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"),   "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"),  bg_hex)
+        pPr.append(shd)
+        r = p.add_run(text)
+        r.font.name      = "Consolas"
+        r.font.size      = Pt(8)
+        r.font.color.rgb = fg_rgb
+        r.bold           = bold
+        return p
+
+    if status == "added":
+        _sp(f"  +  NEW FILE  —  {adds} line{'s' if adds != 1 else ''} added",
+            "0e2318", RGBColor(0x3f, 0xb9, 0x50), bold=True)
+        return
+
+    if status in ("removed", "deleted"):
+        _sp(f"  −  FILE DELETED  —  {dels} line{'s' if dels != 1 else ''} removed",
+            "200e0e", RGBColor(0xf8, 0x51, 0x49), bold=True)
+        return
+
+    if not patch:
+        _sp("     (Diff not available — file too large or binary)",
+            "161b22", RGBColor(0x8b, 0x94, 0x9e))
+        return
+
+    patch_lines = patch.splitlines()
+    shown       = patch_lines[:150]
+
+    for raw in shown:
+        if raw.startswith('+') and not raw.startswith('+++'):
+            bg, fg = "0e2318", RGBColor(0x3f, 0xb9, 0x50)
+            text   = f"+  {raw[1:]}"
+        elif raw.startswith('-') and not raw.startswith('---'):
+            bg, fg = "200e0e", RGBColor(0xf8, 0x51, 0x49)
+            text   = f"−  {raw[1:]}"          # − (minus sign)
+        elif raw.startswith('@'):
+            bg, fg = "0c1c2c", RGBColor(0x58, 0xa6, 0xff)
+            text   = f"   {raw}"
+        elif raw.startswith(('\\', '+++', '---', 'diff ', 'index ', 'new file',
+                              'deleted file', 'rename ')):
+            bg, fg = "161b22", RGBColor(0x6e, 0x76, 0x81)
+            text   = f"   {raw}"
+        else:
+            bg, fg = "0d1117", RGBColor(0x6e, 0x76, 0x81)
+            text   = f"   {raw[1:] if raw and raw[0] == ' ' else raw}"
+        _sp(text, bg, fg)
+
+    if len(patch_lines) > 150:
+        _sp(f"   ⋯  {len(patch_lines) - 150} more lines not shown",
+            "161b22", RGBColor(0xd2, 0x99, 0x22))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Word document generator
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -326,7 +438,7 @@ def generate_word_doc(field_values, field_defs, pr_data, file_comments, output_d
     # ── file changes ──
     if file_comments:
         doc.add_paragraph("")
-        doc.add_heading("File Changes & Review Comments", level=1)
+        doc.add_heading("Code Changes", level=1)
         for idx, fc in enumerate(file_comments, 1):
             fname   = fc.get("filename", "unknown")
             status  = fc.get("status", "modified")
@@ -334,66 +446,58 @@ def generate_word_doc(field_values, field_defs, pr_data, file_comments, output_d
             shots   = fc.get("screenshots", [])
             adds    = fc.get("additions", 0)
             dels    = fc.get("deletions", 0)
+            patch   = fc.get("patch", "")
 
             doc.add_paragraph("")
-            fh  = doc.add_paragraph()
-            r1  = fh.add_run(f"[{STATUS_EMOJI.get(status,'~')}]  ")
-            r1.bold = True; r1.font.size = Pt(11)
+
+            # ── file header ──────────────────────────────────────────────────
+            fh = doc.add_paragraph()
+            r1 = fh.add_run(f"Step {idx}  ")
+            r1.bold = True; r1.font.size = Pt(10)
             r1.font.color.rgb = RGBColor(0x58, 0xa6, 0xff)
-            r2  = fh.add_run(f"{idx}. {fname}")
-            r2.bold = True; r2.font.size = Pt(11)
-            r3  = fh.add_run(f"   ({status.upper()})")
-            r3.font.size = Pt(9)
-            r3.font.color.rgb = RGBColor(0x8b, 0x94, 0x9e)
+            badge_lbl = STATUS_EMOJI.get(status, "~")
+            r2 = fh.add_run(f"[{badge_lbl}] {status.upper()}  ")
+            r2.bold = True; r2.font.size = Pt(9)
+            if status == "added":
+                r2.font.color.rgb = RGBColor(0x3f, 0xb9, 0x50)
+            elif status in ("removed", "deleted"):
+                r2.font.color.rgb = RGBColor(0xf8, 0x51, 0x49)
+            else:
+                r2.font.color.rgb = RGBColor(0xd2, 0x99, 0x22)
+            r3 = fh.add_run(fname)
+            r3.bold = True; r3.font.size = Pt(10)
+            r3.font.name = "Consolas"
+            r3.font.color.rgb = RGBColor(0xe6, 0xed, 0xf3)
 
             if adds or dels:
-                sp = doc.add_paragraph(f"    +{adds} additions   -{dels} deletions")
-                sp.paragraph_format.left_indent = Cm(0.5)
-                if sp.runs:
-                    sp.runs[0].font.size = Pt(9)
-                    sp.runs[0].font.color.rgb = RGBColor(0x8b, 0x94, 0x9e)
+                sp = doc.add_paragraph()
+                sp.paragraph_format.left_indent = Cm(0.3)
+                ra = sp.add_run(f"+{adds} ")
+                ra.font.size = Pt(9); ra.font.color.rgb = RGBColor(0x3f, 0xb9, 0x50)
+                rd = sp.add_run(f"−{dels}")
+                rd.font.size = Pt(9); rd.font.color.rgb = RGBColor(0xf8, 0x51, 0x49)
 
+            # ── change description (word comment) ────────────────────────────
             if comment:
                 doc.add_paragraph("")
-                ch = doc.add_paragraph("  Review Comment:")
-                ch.runs[0].bold = True
-                ch.runs[0].font.size = Pt(10)
-                ch.runs[0].font.color.rgb = RGBColor(0x58, 0xa6, 0xff)
-                cp = doc.add_paragraph(f"  {comment}")
-                cp.paragraph_format.left_indent = Cm(0.8)
+                ch = doc.add_paragraph()
+                ch.paragraph_format.left_indent = Cm(0.3)
+                rl = ch.add_run("Change Description:  ")
+                rl.bold = True; rl.font.size = Pt(9)
+                rl.font.color.rgb = RGBColor(0xd2, 0x99, 0x22)
+                rc = ch.add_run(comment)
+                rc.font.size = Pt(10)
+                rc.font.color.rgb = RGBColor(0xe6, 0xed, 0xf3)
 
-            # ── code diff/patch ──
-            patch = fc.get("patch", "")
-            if patch:
-                doc.add_paragraph("")
-                ph = doc.add_paragraph("  Code Diff:")
-                if ph.runs:
-                    ph.runs[0].bold = True
-                    ph.runs[0].font.size = Pt(9)
-                    ph.runs[0].font.color.rgb = RGBColor(0x8b, 0x94, 0x9e)
-                patch_lines = patch.splitlines()
-                shown = patch_lines[:80]
-                for dl in shown:
-                    pp = doc.add_paragraph(style="Normal")
-                    pp.paragraph_format.left_indent = Cm(0.8)
-                    r = pp.add_run(dl)
-                    r.font.name = "Consolas"
-                    r.font.size = Pt(8)
-                    if dl.startswith('+'):
-                        r.font.color.rgb = RGBColor(0x3f, 0xb9, 0x50)
-                    elif dl.startswith('-'):
-                        r.font.color.rgb = RGBColor(0xf8, 0x51, 0x49)
-                    elif dl.startswith('@'):
-                        r.font.color.rgb = RGBColor(0x58, 0xa6, 0xff)
-                    else:
-                        r.font.color.rgb = RGBColor(0x8b, 0x94, 0x9e)
-                if len(patch_lines) > 80:
-                    tp = doc.add_paragraph(
-                        f"  ... {len(patch_lines) - 80} more lines (truncated)")
-                    tp.paragraph_format.left_indent = Cm(0.8)
-                    if tp.runs:
-                        tp.runs[0].font.size = Pt(8)
-                        tp.runs[0].font.color.rgb = RGBColor(0xd2, 0x99, 0x22)
+            # ── GitHub-style diff block ───────────────────────────────────────
+            doc.add_paragraph("")
+            dh = doc.add_paragraph()
+            dh.paragraph_format.left_indent = Cm(0.3)
+            rh = dh.add_run("Code Changes:")
+            rh.bold = True; rh.font.size = Pt(9)
+            rh.font.color.rgb = RGBColor(0x8b, 0x94, 0x9e)
+
+            _word_diff_block(doc, patch, status, adds, dels)
 
             for si, shot in enumerate(shots, 1):
                 if isinstance(shot, dict):
@@ -432,7 +536,10 @@ def generate_word_doc(field_values, field_defs, pr_data, file_comments, output_d
                f"Issue_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     if not doc_name.endswith(".docx"):
         doc_name += ".docx"
-    out = os.path.join(output_dir, doc_name)
+    pr_num = str(pr_data.get("number", "")) if pr_data else ""
+    save_dir = os.path.join(output_dir, f"PR_{pr_num}") if pr_num else output_dir
+    os.makedirs(save_dir, exist_ok=True)
+    out = os.path.join(save_dir, doc_name)
     doc.save(out)
     return out
 
@@ -536,7 +643,7 @@ def build_preview_html(field_values, field_defs, pr_data, file_comments):
 
     # file changes
     if file_comments:
-        body.append('<div class="section"><h1>File Changes &amp; Review Comments</h1>')
+        body.append('<div class="section"><h1>Code Changes</h1>')
         for idx, fc in enumerate(file_comments, 1):
             fname        = fc.get("filename", "unknown")
             status       = fc.get("status", "modified")
@@ -545,6 +652,7 @@ def build_preview_html(field_values, field_defs, pr_data, file_comments):
             shots        = fc.get("screenshots", [])
             adds         = fc.get("additions", 0)
             dels         = fc.get("deletions", 0)
+            patch        = fc.get("patch", "")
             badge        = STATUS_EMOJI.get(status, "~")
 
             body.append(f'<div class="file-card file-{status}">')
@@ -554,37 +662,53 @@ def build_preview_html(field_values, field_defs, pr_data, file_comments):
                         f'<span class="adds">+{adds}</span>&nbsp;&nbsp;'
                         f'<span class="dels">-{dels}</span></div>')
 
+            # NEW FILE banner
+            if status == "added":
+                body.append(f'<div style="background:#0e2318;border-radius:4px;'
+                            f'padding:6px 12px;margin-top:8px;font-family:Consolas,monospace;'
+                            f'font-size:12px;color:#3fb950;font-weight:700">'
+                            f'+ NEW FILE &nbsp;—&nbsp; {adds} line{"s" if adds != 1 else ""} added'
+                            f'</div>')
+
             if word_comment:
                 body.append(f'<div class="comment-box">'
-                            f'<div class="comment-label">Word Comment</div>'
+                            f'<div class="comment-label">Change Description</div>'
                             f'{e(word_comment)}</div>')
             if jira_comment and jira_comment != word_comment:
                 body.append(f'<div class="comment-box" style="border-left-color:#58a6ff">'
                             f'<div class="comment-label" style="color:#58a6ff">Jira Comment</div>'
                             f'{e(jira_comment)}</div>')
 
-            # code diff/patch
-            patch = fc.get("patch", "")
-            if patch:
+            # GitHub-style diff block
+            if patch and status != "added":
                 patch_lines = patch.splitlines()
-                shown = patch_lines[:100]
+                shown = patch_lines[:120]
                 diff_rows = []
                 for dl in shown:
-                    if dl.startswith('+'):   cls = "diff-add"
-                    elif dl.startswith('-'): cls = "diff-del"
-                    elif dl.startswith('@'): cls = "diff-hunk"
-                    else:                    cls = "diff-ctx"
-                    diff_rows.append(f'<div class="{cls}">{e(dl)}</div>')
-                if len(patch_lines) > 100:
+                    if dl.startswith('+') and not dl.startswith('+++'):
+                        cls, sym = "diff-add", "+"
+                        diff_rows.append(
+                            f'<div class="{cls}"><span style="opacity:.6;margin-right:6px">{sym}</span>{e(dl[1:])}</div>')
+                    elif dl.startswith('-') and not dl.startswith('---'):
+                        cls, sym = "diff-del", "−"
+                        diff_rows.append(
+                            f'<div class="{cls}"><span style="opacity:.6;margin-right:6px">{sym}</span>{e(dl[1:])}</div>')
+                    elif dl.startswith('@'):
+                        diff_rows.append(
+                            f'<div class="diff-hunk">{e(dl)}</div>')
+                    else:
+                        diff_rows.append(
+                            f'<div class="diff-ctx"><span style="opacity:.4;margin-right:6px">&nbsp;</span>{e(dl[1:] if dl and dl[0]==" " else dl)}</div>')
+                if len(patch_lines) > 120:
                     diff_rows.append(
                         f'<div class="diff-ctx" style="color:#d29922">'
-                        f'... {len(patch_lines)-100} more lines (truncated)</div>')
+                        f'⋯  {len(patch_lines)-120} more lines not shown</div>')
                 body.append(
-                    f'<details class="diff-block">'
-                    f'<summary>View Diff &nbsp;'
+                    f'<details class="diff-block" open>'
+                    f'<summary>Code Changes &nbsp;'
                     f'<span style="color:#3fb950">+{adds}</span>'
-                    f'&nbsp;<span style="color:#f85149">-{dels}</span>'
-                    f'&nbsp;lines</summary>'
+                    f'&nbsp;<span style="color:#f85149">−{dels}</span>'
+                    f'</summary>'
                     f'<div class="diff-content">{"".join(diff_rows)}</div>'
                     f'</details>')
 
@@ -1061,6 +1185,210 @@ class FieldManagerDialog(tk.Toplevel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  DiffViewPopup  — GitHub-style split diff viewer
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DiffViewPopup(tk.Toplevel):
+
+    def __init__(self, parent, filename, patch, status, adds=0, dels=0):
+        super().__init__(parent)
+        self.title(f"Changes  —  {os.path.basename(filename)}")
+        self.geometry("1300x720")
+        self.minsize(900, 480)
+        self.configure(bg=C["bg"])
+        self.transient(parent)
+        self._build(filename, patch, status, adds, dels)
+
+    # ── patch parser ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _split_rows(patch):
+        """Convert unified diff patch to split-diff row list.
+
+        Each row: (l_type, l_ln, l_text, r_type, r_ln, r_text)
+        l/r_type: 'del' | 'add' | 'ctx' | 'hunk' | 'empty'
+        """
+        unified = []
+        old_ln = new_ln = 0
+        for line in patch.splitlines():
+            if line.startswith("@@"):
+                m = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)", line)
+                if m:
+                    old_ln = int(m.group(1))
+                    new_ln = int(m.group(2))
+                unified.append(("hunk", None, None, line))
+            elif line.startswith("+") and not line.startswith("+++"):
+                unified.append(("add", None, new_ln, line[1:]))
+                new_ln += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                unified.append(("del", old_ln, None, line[1:]))
+                old_ln += 1
+            elif line and line[0] not in ("\\",):
+                text = line[1:] if line.startswith(" ") else line
+                unified.append(("ctx", old_ln, new_ln, text))
+                old_ln += 1; new_ln += 1
+
+        rows = []
+        i = 0
+        while i < len(unified):
+            rtype, a, b, text = unified[i]
+            if rtype == "hunk":
+                rows.append(("hunk", None, text, "hunk", None, text))
+                i += 1
+            elif rtype == "ctx":
+                rows.append(("ctx", a, text, "ctx", b, text))
+                i += 1
+            else:
+                dels, adds = [], []
+                while i < len(unified) and unified[i][0] in ("del", "add"):
+                    t, oa, nb, tx = unified[i]
+                    (dels if t == "del" else adds).append(
+                        (oa if t == "del" else nb, tx))
+                    i += 1
+                for j in range(max(len(dels), len(adds))):
+                    lv = dels[j] if j < len(dels) else None
+                    rv = adds[j] if j < len(adds) else None
+                    rows.append((
+                        "del"   if lv else "empty", lv[0] if lv else None, lv[1] if lv else "",
+                        "add"   if rv else "empty", rv[0] if rv else None, rv[1] if rv else "",
+                    ))
+        return rows
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build(self, filename, patch, status, adds, dels):
+        # ── header bar ───────────────────────────────────────────────────────
+        hdr = tk.Frame(self, bg=C["surface"])
+        hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C["accent"], width=4).pack(side="left", fill="y")
+        tk.Label(hdr, text=f"  {filename}",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Consolas", 11, "bold")).pack(side="left", padx=8, pady=8)
+        badge_bg = STATUS_BADGE.get(status, C["surface"])
+        tk.Label(hdr, text=f"  {STATUS_EMOJI.get(status,'~')} {status.upper()}  ",
+                 bg=badge_bg, fg="#ffffff",
+                 font=("Segoe UI", 9, "bold"), padx=4).pack(side="left", padx=(0, 10))
+        sfg = C["green"] if adds > dels else C["red"] if dels > adds else C["muted"]
+        tk.Label(hdr, text=f"+{adds}  −{dels}",
+                 bg=C["surface"], fg=sfg,
+                 font=("Segoe UI", 9, "bold")).pack(side="left")
+        tk.Button(hdr, text="✕",
+                  bg=C["surface"], fg=C["muted"], relief="flat",
+                  font=("Segoe UI", 12), padx=10, pady=4, cursor="hand2",
+                  activebackground=C["border"],
+                  command=self.destroy).pack(side="right")
+
+        # ── column labels ─────────────────────────────────────────────────────
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+        col_hdr = tk.Frame(self, bg="#161b22")
+        col_hdr.pack(fill="x")
+        tk.Label(col_hdr, text="  Before (old)",
+                 bg="#161b22", fg=C["muted"],
+                 font=("Segoe UI", 9, "bold"), anchor="w",
+                 ).pack(side="left", fill="x", expand=True, padx=8, pady=4)
+        tk.Frame(col_hdr, bg=C["border"], width=1).pack(side="left", fill="y")
+        tk.Label(col_hdr, text="  After (new)",
+                 bg="#161b22", fg=C["muted"],
+                 font=("Segoe UI", 9, "bold"), anchor="w",
+                 ).pack(side="left", fill="x", expand=True, padx=8, pady=4)
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+
+        # ── pane area ─────────────────────────────────────────────────────────
+        pane = tk.Frame(self, bg="#0d1117")
+        pane.pack(fill="both", expand=True)
+
+        vsb = ttk.Scrollbar(pane, orient="vertical")
+        vsb.pack(side="right", fill="y")
+
+        xsb = ttk.Scrollbar(self, orient="horizontal")
+        xsb.pack(fill="x", side="bottom")
+
+        lf = tk.Frame(pane, bg="#0d1117"); lf.pack(side="left", fill="both", expand=True)
+        tk.Frame(pane, bg=C["border"], width=1).pack(side="left", fill="y")
+        rf = tk.Frame(pane, bg="#0d1117"); rf.pack(side="left", fill="both", expand=True)
+
+        txt_kw = dict(
+            bg="#0d1117", fg=C["text"],
+            font=("Consolas", 9), relief="flat",
+            state="disabled", wrap="none",
+            highlightthickness=0, insertbackground=C["text"],
+        )
+
+        self._lt = tk.Text(lf, **txt_kw)
+        self._rt = tk.Text(rf, **txt_kw)
+
+        _TAG = {
+            "del":   dict(background="#200e0e", foreground="#f85149"),
+            "add":   dict(background="#0e2318", foreground="#3fb950"),
+            "ctx":   dict(foreground="#8b949e"),
+            "hunk":  dict(background="#0c1c2c", foreground="#58a6ff"),
+            "empty": dict(background="#161b22"),
+            "ln":    dict(foreground="#484f58"),
+        }
+        for t in (self._lt, self._rt):
+            for tag, cfg in _TAG.items():
+                t.tag_config(tag, **cfg)
+
+        # ── populate ──────────────────────────────────────────────────────────
+        rows = self._split_rows(patch)
+        self._lt.config(state="normal")
+        self._rt.config(state="normal")
+
+        for l_type, l_ln, l_text, r_type, r_ln, r_text in rows:
+            if l_type == "hunk":
+                self._lt.insert("end", f"  {l_text}\n", "hunk")
+                self._rt.insert("end", f"  {r_text}\n", "hunk")
+            else:
+                l_ln_s = f"{l_ln:>5} " if l_ln is not None else "       "
+                r_ln_s = f"{r_ln:>5} " if r_ln is not None else "       "
+                sym_l  = "−" if l_type == "del" else (" " if l_type == "ctx" else " ")
+                sym_r  = "+" if r_type == "add" else (" " if r_type == "ctx" else " ")
+
+                if l_type == "empty":
+                    self._lt.insert("end", "\n", "empty")
+                else:
+                    self._lt.insert("end", l_ln_s, "ln")
+                    self._lt.insert("end", f"{sym_l} {l_text}\n", l_type)
+
+                if r_type == "empty":
+                    self._rt.insert("end", "\n", "empty")
+                else:
+                    self._rt.insert("end", r_ln_s, "ln")
+                    self._rt.insert("end", f"{sym_r} {r_text}\n", r_type)
+
+        self._lt.config(state="disabled")
+        self._rt.config(state="disabled")
+
+        # ── scrollbar wiring ─────────────────────────────────────────────────
+        def _yscroll(*args):
+            self._lt.yview(*args)
+            self._rt.yview(*args)
+
+        def _on_scroll_l(first, last):
+            vsb.set(first, last)
+            self._rt.yview_moveto(first)
+
+        def _on_scroll_r(first, last):
+            vsb.set(first, last)
+            self._lt.yview_moveto(first)
+
+        vsb.config(command=_yscroll)
+        self._lt.config(yscrollcommand=_on_scroll_l, xscrollcommand=xsb.set)
+        self._rt.config(yscrollcommand=_on_scroll_r, xscrollcommand=xsb.set)
+        xsb.config(command=lambda *a: [self._lt.xview(*a), self._rt.xview(*a)])
+
+        self._lt.pack(fill="both", expand=True)
+        self._rt.pack(fill="both", expand=True)
+
+        def _mw(e):
+            self._lt.yview_scroll(int(-1*(e.delta/120)), "units")
+            self._rt.yview_scroll(int(-1*(e.delta/120)), "units")
+            return "break"
+        self._lt.bind("<MouseWheel>", _mw)
+        self._rt.bind("<MouseWheel>", _mw)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  FileChangesPopup  (unchanged from v2, just cleaner)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1093,7 +1421,7 @@ class FileChangesPopup(tk.Toplevel):
                  bg=C["surface"], fg=C["text"],
                  font=("Segoe UI", 13, "bold")).pack(side="left")
         tk.Label(hdr_f,
-                 text="   Sorted by dependency  •  Step comments pre-filled  •  Word & Jira comments are independent",
+                 text="   Sorted by dependency  •  Change Description → Word doc  •  Jira Comment → Jira ticket",
                  bg=C["surface"], fg=C["muted"],
                  font=("Segoe UI", 9)).pack(side="left", pady=(3, 0))
 
@@ -1229,60 +1557,16 @@ class FileChangesPopup(tk.Toplevel):
 
             patch = f.get("patch", "")
             if patch:
-                diff_visible = tk.BooleanVar(value=False)
-                diff_content = tk.Frame(body, bg="#0a0e14",
-                                        highlightbackground=C["border"],
-                                        highlightthickness=1)
-                diff_text = tk.Text(diff_content, bg="#0a0e14", fg=C["text"],
-                                    font=("Consolas", 8), height=10,
-                                    relief="flat", insertbackground=C["text"],
-                                    state="disabled", wrap="none",
-                                    highlightthickness=0)
-                diff_text.tag_config("add",  background="#0e2318", foreground="#3fb950")
-                diff_text.tag_config("del",  background="#200e0e", foreground="#f85149")
-                diff_text.tag_config("hunk", background="#0c1c2c", foreground="#58a6ff")
-                diff_text.tag_config("ctx",  foreground="#6e7681")
-                diff_text.config(state="normal")
-                patch_lines = patch.splitlines()
-                for dl in patch_lines[:80]:
-                    if dl.startswith('+'):   tg = "add"
-                    elif dl.startswith('-'): tg = "del"
-                    elif dl.startswith('@'): tg = "hunk"
-                    else:                    tg = "ctx"
-                    diff_text.insert("end", dl + "\n", tg)
-                if len(patch_lines) > 80:
-                    diff_text.insert("end",
-                        f"... {len(patch_lines)-80} more lines (truncated)\n", "hunk")
-                diff_text.config(state="disabled")
-                diff_xsb = ttk.Scrollbar(diff_content, orient="horizontal",
-                                         command=diff_text.xview)
-                diff_text.configure(xscrollcommand=diff_xsb.set)
-                diff_text.pack(fill="both", expand=True, padx=1, pady=(1, 0))
-                diff_xsb.pack(fill="x", padx=1, pady=(0, 1))
-
-                def _sw_dt(e, dt=diff_text):
-                    dt.yview_scroll(int(-1*(e.delta/120)), "units")
-                diff_text.bind("<MouseWheel>", _sw_dt)
-
-                def _toggle_diff(dv=diff_visible, dc=diff_content):
-                    if dv.get():
-                        dc.pack_forget()
-                        dv.set(False)
-                        diff_btn.config(text="▶ View Diff")
-                    else:
-                        dc.pack(fill="x", padx=0, pady=(2, 4))
-                        dv.set(True)
-                        diff_btn.config(text="▼ Hide Diff")
-
-                n_lines = len(patch_lines)
-                diff_btn = tk.Button(
+                n_lines = len(patch.splitlines())
+                tk.Button(
                     gh_row,
-                    text=f"▶ View Diff  ({n_lines} lines)",
-                    bg=rbg, fg=C["muted"], relief="flat",
-                    font=("Segoe UI", 8), padx=6, pady=2, cursor="hand2",
+                    text=f"⊞ View Changes  ({n_lines} lines)",
+                    bg=rbg, fg=C["accent"], relief="flat",
+                    font=("Segoe UI", 8, "bold"), padx=6, pady=2, cursor="hand2",
                     activebackground=C["border"],
-                    command=_toggle_diff)
-                diff_btn.pack(side="left", padx=(6, 0))
+                    command=lambda fn=fname, p=patch, st=status, a=adds, d=dels:
+                        DiffViewPopup(self, fn, p, st, a, d)
+                ).pack(side="left", padx=(6, 0))
 
             # ── two comment columns ──────────────────────────────────────────
             comment_row = tk.Frame(body, bg=rbg)
@@ -1291,7 +1575,7 @@ class FileChangesPopup(tk.Toplevel):
             # Word comment (left)
             word_col = tk.Frame(comment_row, bg=rbg)
             word_col.pack(side="left", fill="both", expand=True, padx=(0, 6))
-            tk.Label(word_col, text="Word Comment:", bg=rbg, fg=C["yellow"],
+            tk.Label(word_col, text="Change Description (Word doc):", bg=rbg, fg=C["yellow"],
                      font=("Segoe UI", 9, "bold")).pack(anchor="w")
             word_cbox = scrolledtext.ScrolledText(
                 word_col, height=3, bg=C["inp"], fg=C["text"],
@@ -1442,6 +1726,313 @@ class FileChangesPopup(tk.Toplevel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  SQL PR File popup  –  combine changed files into a single runnable script
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SqlFilePopup(tk.Toplevel):
+
+    def __init__(self, parent, files, pr_data, config_data):
+        super().__init__(parent)
+        self.title("SQL PR File Generator")
+        self.geometry("1020x700")
+        self.minsize(820, 520)
+        self.configure(bg=C["bg"])
+        self.grab_set()
+        self.transient(parent)
+
+        self._files   = sorted(files,
+                               key=lambda f: (_dep_score(f.get("filename", "")),
+                                              f.get("filename", "")))
+        self._pr      = pr_data
+        self._cfg     = config_data
+        self._rows    = []
+        self._result  = None
+
+        pr_num = pr_data.get("number", "combined")
+        out_dir = config_data.get("word_doc_output_dir", BASE_DIR)
+        pr_dir  = os.path.join(out_dir, f"PR_{pr_num}")
+        self._out_var = tk.StringVar(
+            value=os.path.join(pr_dir, f"PR_{pr_num}.sql"))
+
+        self._build()
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build(self):
+        bar = tk.Frame(self, bg=C["surface"])
+        bar.pack(fill="x")
+        tk.Frame(bar, bg=C["yellow"], width=4).pack(side="left", fill="y")
+        hf = tk.Frame(bar, bg=C["surface"])
+        hf.pack(side="left", padx=14, pady=10, fill="x", expand=True)
+        tk.Label(hf, text="SQL PR File",
+                 bg=C["surface"], fg=C["yellow"],
+                 font=("Segoe UI", 13, "bold")).pack(side="left")
+        tk.Label(hf,
+                 text="   Files sorted by dependency  •  Edit SQL comment per file  "
+                      "•  Combined into one runnable .sql script",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 9)).pack(side="left")
+        for lbl, st in [("Select All", True), ("Deselect All", False)]:
+            tk.Button(bar, text=lbl, bg=C["card"], fg=C["muted"],
+                      relief="flat", font=("Segoe UI", 9), padx=10, pady=4,
+                      activebackground=C["border"], cursor="hand2",
+                      command=lambda s=st: self._toggle_all(s)
+                      ).pack(side="right", padx=4, pady=10)
+
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+
+        wrap = tk.Frame(self, bg=C["bg"]); wrap.pack(fill="both", expand=True)
+        self._canvas = tk.Canvas(wrap, bg=C["bg"], highlightthickness=0)
+        vsb = ttk.Scrollbar(wrap, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self._canvas.pack(side="left", fill="both", expand=True)
+        self._lf = tk.Frame(self._canvas, bg=C["bg"])
+        wid = self._canvas.create_window((0, 0), window=self._lf, anchor="nw")
+        self._canvas.bind("<Configure>",
+                          lambda e: self._canvas.itemconfig(wid, width=e.width))
+        self._lf.bind("<Configure>",
+                      lambda e: self._canvas.configure(
+                          scrollregion=(0, 0, e.width, e.height)))
+        self._canvas.bind("<MouseWheel>",
+                          lambda e: self._canvas.yview_scroll(
+                              int(-1*(e.delta/120)), "units"))
+
+        self._build_rows()
+
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+
+        bot = tk.Frame(self, bg=C["surface"]); bot.pack(fill="x", side="bottom")
+        out_row = tk.Frame(bot, bg=C["surface"]); out_row.pack(fill="x", padx=16, pady=(10, 4))
+        tk.Label(out_row, text="Output file:",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        ttk.Entry(out_row, textvariable=self._out_var).pack(side="left", fill="x", expand=True)
+        tk.Button(out_row, text="Browse",
+                  bg=C["card"], fg=C["muted"], relief="flat",
+                  font=("Segoe UI", 9), padx=8, pady=3, cursor="hand2",
+                  activebackground=C["border"],
+                  command=self._browse).pack(side="left", padx=(6, 0))
+
+        btn_row = tk.Frame(bot, bg=C["surface"]); btn_row.pack(fill="x", padx=16, pady=(0, 12))
+        self._sv = tk.StringVar(value="")
+        tk.Label(btn_row, textvariable=self._sv,
+                 bg=C["surface"], fg=C["green"],
+                 font=("Segoe UI", 9)).pack(side="left")
+        tk.Button(btn_row, text="Cancel",
+                  bg=C["card"], fg=C["muted"], relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=5, cursor="hand2",
+                  activebackground=C["border"],
+                  command=self.destroy).pack(side="right", padx=8)
+        tk.Button(btn_row, text="  Generate SQL File  ",
+                  bg=C["yellow"], fg="#0d1117", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=14, pady=5, cursor="hand2",
+                  activebackground=C["orange"],
+                  command=self._generate).pack(side="right", padx=4)
+
+    def _build_rows(self):
+        total = len(self._files)
+        for idx, f in enumerate(self._files, 1):
+            fname  = f.get("filename", "")
+            status = f.get("status", "modified")
+            adds   = f.get("additions", 0)
+            dels   = f.get("deletions", 0)
+            patch  = f.get("patch", "")
+            rbg    = STATUS_ROW.get(status, C["card"])
+            bbg    = STATUS_BADGE.get(status, C["surface"])
+            em     = STATUS_EMOJI.get(status, "~")
+
+            obj_name = _detect_sql_object(fname, patch)
+            default  = f"Step {idx}: {obj_name}"
+
+            card = tk.Frame(self._lf, bg=rbg,
+                            highlightbackground=C["border"], highlightthickness=1)
+            card.pack(fill="x", padx=10, pady=3)
+
+            def _sw(e, c=self._canvas):
+                c.yview_scroll(int(-1*(e.delta/120)), "units")
+            card.bind("<MouseWheel>", _sw)
+
+            hdr = tk.Frame(card, bg=rbg); hdr.pack(fill="x", padx=8, pady=(8, 4))
+
+            inc = tk.BooleanVar(value=(status != "removed"))
+            tk.Checkbutton(hdr, variable=inc, bg=rbg, fg=C["text"],
+                           selectcolor=C["cb_sel"],
+                           activebackground=rbg, activeforeground=C["text"],
+                           text="Include", font=("Segoe UI", 8),
+                           bd=0, relief="flat", cursor="hand2").pack(side="left")
+
+            tk.Label(hdr, text=f"  Step {idx}/{total}  ",
+                     bg=C["accent"], fg="#ffffff",
+                     font=("Segoe UI", 8, "bold"), padx=4, pady=2
+                     ).pack(side="left", padx=(8, 6))
+            tk.Label(hdr, text=f"  {em}  {status.upper()}  ",
+                     bg=bbg, fg="#ffffff",
+                     font=("Segoe UI", 8, "bold"), padx=4, pady=2
+                     ).pack(side="left", padx=(0, 10))
+
+            parts = fname.split("/")
+            pre   = "/".join(parts[:-2]) + "/" if len(parts) > 2 else ""
+            tail  = "/".join(parts[-2:])
+            pf    = tk.Frame(hdr, bg=rbg); pf.pack(side="left", fill="x", expand=True)
+            if pre:
+                tk.Label(pf, text=pre, bg=rbg, fg=C["muted"],
+                         font=("Consolas", 10)).pack(side="left")
+            tk.Label(pf, text=tail, bg=rbg, fg=C["text"],
+                     font=("Consolas", 10, "bold")).pack(side="left")
+
+            sfg = C["green"] if adds > dels else C["red"] if dels > adds else C["muted"]
+            tk.Label(hdr, text=f"+{adds}  −{dels}", bg=rbg, fg=sfg,
+                     font=("Segoe UI", 9, "bold")).pack(side="right", padx=8)
+
+            body = tk.Frame(card, bg=rbg); body.pack(fill="x", padx=8, pady=(0, 8))
+
+            # SQL comment row
+            cmt_row = tk.Frame(body, bg=rbg); cmt_row.pack(fill="x", pady=(0, 4))
+            tk.Label(cmt_row, text="SQL Comment:",
+                     bg=rbg, fg=C["yellow"], font=("Segoe UI", 9, "bold")
+                     ).pack(side="left", padx=(0, 8))
+            cmt_var = tk.StringVar(value=default)
+            cmt_ent = ttk.Entry(cmt_row, textvariable=cmt_var)
+            cmt_ent.pack(side="left", fill="x", expand=True)
+            cmt_ent.bind("<MouseWheel>", _sw)
+
+            # Detected object label + GitHub link
+            info_row = tk.Frame(body, bg=rbg); info_row.pack(fill="x")
+            tk.Label(info_row, text=f"Detected: {obj_name}",
+                     bg=rbg, fg=C["muted"],
+                     font=("Segoe UI", 8, "italic")).pack(side="left")
+            gh_url = f.get("blob_url") or f.get("html_url", "")
+            if gh_url:
+                tk.Button(info_row, text="View on GitHub ↗",
+                          bg=rbg, fg=C["accent"], relief="flat",
+                          font=("Segoe UI", 8), padx=6, pady=1, cursor="hand2",
+                          activebackground=C["border"],
+                          command=lambda u=gh_url: webbrowser.open(u)
+                          ).pack(side="right")
+
+            self._rows.append(dict(
+                filename=fname, status=status,
+                additions=adds, deletions=dels,
+                patch=patch, inc=inc, cmt_var=cmt_var,
+                raw_url=f.get("raw_url", ""),
+            ))
+
+    # ── actions ───────────────────────────────────────────────────────────────
+
+    def _toggle_all(self, state):
+        for r in self._rows: r["inc"].set(state)
+
+    def _browse(self):
+        p = filedialog.asksaveasfilename(
+            defaultextension=".sql",
+            filetypes=[("SQL files", "*.sql"), ("All files", "*.*")],
+            initialfile=os.path.basename(self._out_var.get()),
+            initialdir=os.path.dirname(self._out_var.get()) or BASE_DIR,
+            parent=self)
+        if p:
+            self._out_var.set(p)
+
+    def _fetch_content(self, raw_url):
+        if not raw_url:
+            return None
+        try:
+            tok_file = self._cfg.get("github_token_file", "")
+            token = ""
+            if tok_file and os.path.exists(tok_file):
+                with open(tok_file) as fh:
+                    token = fh.read().strip()
+            headers = {"Authorization": f"token {token}"} if token else {}
+            r = requests.get(raw_url, headers=headers, timeout=15)
+            return r.text if r.ok else None
+        except Exception:
+            return None
+
+    def _generate(self):
+        included = [r for r in self._rows if r["inc"].get()]
+        if not included:
+            messagebox.showwarning("No files", "Select at least one file.", parent=self)
+            return
+        out = self._out_var.get().strip()
+        if not out:
+            messagebox.showwarning("No path", "Set an output file path.", parent=self)
+            return
+        if not out.lower().endswith(".sql"):
+            out += ".sql"
+
+        self._sv.set(f"Fetching {len(included)} file(s)…")
+        self.update_idletasks()
+
+        pr_num   = self._pr.get("number", "")
+        pr_title = self._pr.get("title", "")
+
+        blk = []
+        blk.append("-- " + "=" * 68)
+        blk.append(f"-- PR #{pr_num}: {pr_title}")
+        blk.append(f"-- Generated : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        blk.append(f"-- Files     : {len(included)}")
+        blk.append("-- " + "=" * 68)
+        blk.append("")
+
+        for idx, r in enumerate(included, 1):
+            fname   = r["filename"]
+            status  = r["status"]
+            adds    = r["additions"]
+            dels    = r["deletions"]
+            comment = r["cmt_var"].get().strip() or f"Step {idx}: {os.path.basename(fname)}"
+
+            blk.append("-- " + "-" * 68)
+            blk.append(f"-- {comment}")
+            blk.append(f"-- File  : {fname}")
+            blk.append(f"-- Status: {status.upper()}  (+{adds} / -{dels})")
+            blk.append("-- " + "-" * 68)
+            blk.append("")
+
+            content = None
+            if r.get("raw_url"):
+                content = self._fetch_content(r["raw_url"])
+
+            if content is None:
+                patch = r.get("patch", "")
+                if patch and status == "added":
+                    # reconstruct from + lines
+                    content = "\n".join(
+                        l[1:] for l in patch.splitlines()
+                        if l.startswith('+') and not l.startswith('+++'))
+                elif patch:
+                    content = (f"-- (Full content unavailable — showing diff)\n"
+                               + "\n".join(
+                                   l[1:] if l and l[0] in ('+', '-', ' ') else l
+                                   for l in patch.splitlines()
+                                   if not l.startswith('+++') and not l.startswith('---')))
+
+            if content:
+                blk.append(_ensure_semicolon(content.rstrip()))
+            else:
+                blk.append(f"-- (Content not available for {fname})")
+
+            blk.append("")
+            blk.append("")
+
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(blk))
+            self._sv.set(f"Saved: {os.path.basename(out)}")
+            self._result = out
+            if messagebox.askyesno("Done",
+                                   f"SQL file saved:\n{out}\n\nOpen now?",
+                                   parent=self):
+                webbrowser.open(out)
+        except Exception as ex:
+            self._sv.set(f"Error: {ex}")
+            messagebox.showerror("Error", str(ex), parent=self)
+
+    def get_result(self):
+        return self._result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Main Application
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1575,6 +2166,8 @@ class App(tk.Tk):
                 f"{pr['state'].upper()}   by {pr['user']['login']}")
         if self.pr_files and hasattr(self, "fc_btn"):
             self.fc_btn.config(state="normal")
+            if hasattr(self, "sql_btn"):
+                self.sql_btn.config(state="normal")
         for k, v in state.get("field_values", {}).items():
             if k in self._field_widgets:
                 self._field_widgets[k].set(v)
@@ -1728,6 +2321,9 @@ class App(tk.Tk):
         self.fc_btn = ttk.Button(row, text="  View File Changes  ", style="Purple.TButton",
                                  state="disabled", command=self._open_file_changes)
         self.fc_btn.pack(side="left", padx=(6, 0))
+        self.sql_btn = ttk.Button(row, text="  SQL PR File  ", style="Orange.TButton",
+                                  state="disabled", command=self._open_sql_popup)
+        self.sql_btn.pack(side="left", padx=(6, 0))
 
         info_f = tk.Frame(card, bg=C["card"]); info_f.pack(fill="x", pady=(6, 0))
         self.pr_info_var = tk.StringVar(value="No PR loaded — enter a PR URL or number above")
@@ -2038,7 +2634,7 @@ class App(tk.Tk):
             ("Jira Email",          "jira_email"),
             ("GitHub Owner",        "github_owner"),
             ("GitHub Repo",         "github_repo"),
-            ("Word Doc Output Dir", "word_doc_output_dir"),
+            ("Output Directory",    "word_doc_output_dir"),
         ]
         vars_ = {}
         for label, key in defs:
@@ -2173,6 +2769,8 @@ class App(tk.Tk):
             self.files_sum_var.set("   ".join(parts) +
                                    "   — click View File Changes to review")
             self.fc_btn.config(state="normal")
+            if hasattr(self, "sql_btn"):
+                self.sql_btn.config(state="normal")
             self._update_pr_preview(pr)
             self.progress.stop()
             self._set_status(f"PR #{pr['number']} loaded — {total} files")
@@ -2197,6 +2795,13 @@ class App(tk.Tk):
                 f"{base}   —   {len(res)} reviewed  |  {n_c} comments  |  {n_s} screenshots")
             self._set_status(
                 f"Review saved: {len(res)} files, {n_c} comments, {n_s} screenshots")
+
+    def _open_sql_popup(self):
+        if not self.pr_files:
+            messagebox.showinfo("No PR loaded", "Fetch a PR first.", parent=self)
+            return
+        dlg = SqlFilePopup(self, self.pr_files, self.pr_cache or {}, self.config_data)
+        self.wait_window(dlg)
 
     # ── Preview ───────────────────────────────────────────────────────────────
 
