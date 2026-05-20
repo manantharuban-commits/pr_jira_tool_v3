@@ -122,8 +122,11 @@ THEMES = {
         bg         = "#0d1117",
         surface    = "#161b22",
         card       = "#1c2128",
+        card2      = "#21262d",
         border     = "#30363d",
+        shadow     = "#090c10",
         accent     = "#58a6ff",
+        accent_dim = "#132236",
         green      = "#3fb950",
         yellow     = "#d29922",
         red        = "#f85149",
@@ -131,9 +134,9 @@ THEMES = {
         orange     = "#e3b341",
         text       = "#e6edf3",
         muted      = "#8b949e",
-        inp        = "#161b22",
+        inp        = "#0d1117",
         hover      = "#1f6feb",
-        cb_sel     = "#2ea043",   # checkbox checked indicator (bright green, visible on dark bg)
+        cb_sel     = "#2ea043",
         tag        = "dark",
         st_badge   = dict(added="#1f6931", modified="#1c4a6e", removed="#8a1f1f",
                           renamed="#5a2d82", copied="#1c4a6e", changed="#1c4a6e"),
@@ -144,18 +147,21 @@ THEMES = {
         bg         = "#f6f8fa",
         surface    = "#ffffff",
         card       = "#ffffff",
+        card2      = "#f6f8fa",
         border     = "#d0d7de",
+        shadow     = "#b8c0c8",
         accent     = "#0969da",
+        accent_dim = "#ddeeff",
         green      = "#1a7f37",
         yellow     = "#9a6700",
         red        = "#cf222e",
         purple     = "#8250df",
-        orange     = "#9a6700",
+        orange     = "#bc6800",
         text       = "#1f2328",
         muted      = "#57606a",
-        inp        = "#f6f8fa",
+        inp        = "#ffffff",
         hover      = "#0550ae",
-        cb_sel     = "#cce5ff",   # checkbox checked indicator
+        cb_sel     = "#cce5ff",
         tag        = "light",
         st_badge   = dict(added="#1a7f37", modified="#0969da", removed="#cf222e",
                           renamed="#8250df", copied="#0969da", changed="#0969da"),
@@ -923,20 +929,30 @@ class DocPreviewWindow(tk.Toplevel):
     # ── build ─────────────────────────────────────────────────────────────────
 
     def _build(self):
+        # ── top accent stripe ─────────────────────────────────────────────────
+        tk.Frame(self, bg=C["orange"], height=3).pack(fill="x")
+
         # ── toolbar ───────────────────────────────────────────────────────────
         self._bar = tk.Frame(self, bg=C["surface"])
         self._bar.pack(fill="x")
-        tk.Label(self._bar, text="Code Changes — Add Comments",
-                 bg=C["surface"], fg=C["accent"],
-                 font=("Segoe UI", 12, "bold")).pack(side="left", padx=16, pady=10)
+        title_f = tk.Frame(self._bar, bg=C["surface"])
+        title_f.pack(side="left", padx=(16, 0), pady=10)
+        tk.Label(title_f, text="◈", bg=C["surface"], fg=C["orange"],
+                 font=("Segoe UI", 13)).pack(side="left", padx=(0, 8))
+        tk.Label(title_f, text="Code Changes",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 12, "bold")).pack(side="left")
+        tk.Label(title_f, text="  —  Add step comments for Word doc",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 9)).pack(side="left", pady=(3, 0))
 
         # Open in Word button — enabled only after doc is generated
         doc_exists = bool(self._doc_path and os.path.exists(self._doc_path))
         self._open_word_btn = tk.Button(
-            self._bar, text="  Open in Word  ",
-            bg=C["green"] if doc_exists else C["surface"],
-            fg="#0d1117" if doc_exists else C["muted"],
-            relief="flat", font=("Segoe UI", 9, "bold"), padx=10, pady=3,
+            self._bar, text="⊞  Open in Word",
+            bg=C["green"] if doc_exists else C["card2"],
+            fg="#ffffff" if doc_exists else C["muted"],
+            relief="flat", font=("Segoe UI", 9, "bold"), padx=12, pady=6,
             activebackground="#2ea043", cursor="hand2" if doc_exists else "arrow",
             state="normal" if doc_exists else "disabled",
             command=self._open_word)
@@ -947,9 +963,9 @@ class DocPreviewWindow(tk.Toplevel):
                                         bg=C["surface"], fg=C["green"],
                                         font=("Segoe UI", 9))
             self._status_lbl.pack(side="right", padx=8)
-            tk.Button(self._bar, text="  Generate Doc  ",
-                      bg=C["green"], fg="#0d1117", relief="flat",
-                      font=("Segoe UI", 9, "bold"), padx=10, pady=3,
+            tk.Button(self._bar, text="✦  Generate Doc",
+                      bg=C["green"], fg="#ffffff", relief="flat",
+                      font=("Segoe UI", 9, "bold"), padx=12, pady=6,
                       activebackground="#2ea043", cursor="hand2",
                       command=self._generate_doc).pack(side="right", padx=4, pady=8)
 
@@ -967,15 +983,17 @@ class DocPreviewWindow(tk.Toplevel):
         panel.pack(fill="both", expand=True)
 
         # header
-        ph = tk.Frame(panel, bg=C["surface"])
+        ph = tk.Frame(panel, bg=C["card2"])
         ph.pack(fill="x")
         tk.Frame(ph, bg=C["yellow"], width=4).pack(side="left", fill="y")
-        tk.Label(ph, text=f"  Code Changes  ({len(self._pr_files)} files)",
-                 bg=C["surface"], fg=C["yellow"],
-                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=6, pady=8)
-        tk.Label(ph, text="  Add change descriptions for Word doc",
-                 bg=C["surface"], fg=C["muted"],
-                 font=("Segoe UI", 8)).pack(side="left")
+        ph_inner = tk.Frame(ph, bg=C["card2"])
+        ph_inner.pack(side="left", fill="x", expand=True, padx=(10, 8), pady=8)
+        tk.Label(ph_inner, text=f"Code Changes",
+                 bg=C["card2"], fg=C["yellow"],
+                 font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(ph_inner, text=f"  {len(self._pr_files)} files changed  •  Add step comments",
+                 bg=C["card2"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(side="left", pady=(2, 0))
 
         tk.Frame(panel, bg=C["border"], height=1).pack(fill="x")
 
@@ -1192,17 +1210,24 @@ class FieldManagerDialog(tk.Toplevel):
     # ── build ─────────────────────────────────────────────────────────────────
 
     def _build(self):
+        # ── top accent stripe ─────────────────────────────────────────────────
+        tk.Frame(self, bg=C["purple"], height=3).pack(fill="x")
+
         # ── title bar ────────────────────────────────────────────────────────
         hdr = tk.Frame(self, bg=C["surface"])
         hdr.pack(fill="x")
         tk.Frame(hdr, bg=C["purple"], width=4).pack(side="left", fill="y")
-        ti = tk.Frame(hdr, bg=C["surface"]); ti.pack(side="left", padx=14, pady=10)
-        tk.Label(ti, text="Manage Fields",
+        ti = tk.Frame(hdr, bg=C["surface"]); ti.pack(side="left", padx=14, pady=12)
+        hdr_row = tk.Frame(ti, bg=C["surface"])
+        hdr_row.pack(anchor="w")
+        tk.Label(hdr_row, text="⊞", bg=C["surface"], fg=C["purple"],
+                 font=("Segoe UI", 14)).pack(side="left", padx=(0, 8))
+        tk.Label(hdr_row, text="Manage Fields",
                  bg=C["surface"], fg=C["text"],
-                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+                 font=("Segoe UI", 13, "bold")).pack(side="left", anchor="w")
         tk.Label(ti, text="Enable / disable fields  •  set defaults  •  control Jira mapping",
                  bg=C["surface"], fg=C["muted"],
-                 font=("Segoe UI", 8)).pack(anchor="w")
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
         tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
 
         # ── column header (grid-based, matches _render_rows columns exactly) ──
@@ -1249,21 +1274,21 @@ class FieldManagerDialog(tk.Toplevel):
         inner_bot = tk.Frame(bot, bg=C["surface"])
         inner_bot.pack(fill="x", padx=14, pady=10)
 
-        tk.Button(inner_bot, text="+ Add Custom Field",
-                  bg=C["accent"], fg="#ffffff", relief="flat",
-                  font=("Segoe UI", 9, "bold"), padx=12, pady=5,
-                  activebackground=C["hover"], cursor="hand2",
+        tk.Button(inner_bot, text="⊕  Add Custom Field",
+                  bg=C["accent_dim"], fg=C["accent"], relief="flat",
+                  font=("Segoe UI", 9, "bold"), padx=12, pady=6,
+                  activebackground=C["border"], cursor="hand2",
                   command=self._add_field).pack(side="left")
 
-        tk.Button(inner_bot, text="Apply & Close",
-                  bg=C["green"], fg="#0d1117", relief="flat",
-                  font=("Segoe UI", 10, "bold"), padx=16, pady=5,
+        tk.Button(inner_bot, text="✦  Apply & Close",
+                  bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=16, pady=6,
                   activebackground="#2ea043", cursor="hand2",
                   command=self._apply).pack(side="right")
-        tk.Button(inner_bot, text="Cancel",
-                  bg=C["red"], fg="#ffffff", relief="flat",
-                  font=("Segoe UI", 10), padx=12, pady=5,
-                  activebackground="#c0392b", cursor="hand2",
+        tk.Button(inner_bot, text="✕  Cancel",
+                  bg=C["card2"], fg=C["muted"], relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground=C["border"], cursor="hand2",
                   command=self.destroy).pack(side="right", padx=(0, 8))
 
     def _render_rows(self):
@@ -1404,41 +1429,55 @@ class FieldManagerDialog(tk.Toplevel):
         """Dialog to create a new custom field."""
         dlg = tk.Toplevel(self)
         dlg.title("Add Custom Field")
-        dlg.geometry("520x420")
+        dlg.geometry("540x440")
         dlg.configure(bg=C["bg"])
         dlg.grab_set()
 
-        tk.Label(dlg, text="New Custom Field",
-                 bg=C["bg"], fg=C["accent"],
-                 font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=20, pady=(16, 12))
+        tk.Frame(dlg, bg=C["accent"], height=3).pack(fill="x")
+        hdr = tk.Frame(dlg, bg=C["surface"])
+        hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C["accent"], width=4).pack(side="left", fill="y")
+        hdr_inner = tk.Frame(hdr, bg=C["surface"])
+        hdr_inner.pack(side="left", padx=12, pady=10)
+        tk.Label(hdr_inner, text="⊕  New Custom Field",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        tk.Label(hdr_inner, text="Define a new field for Jira tickets and Word documents",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x")
 
-        def row(parent, label):
-            f = tk.Frame(parent, bg=C["bg"])
-            f.pack(fill="x", padx=20, pady=4)
-            tk.Label(f, text=label, bg=C["bg"], fg=C["muted"],
-                     width=16, anchor="w").pack(side="left")
-            return f
+        def row(parent, label, idx=None):
+            row_bg = C["card"] if (idx is not None and idx % 2 == 0) else C["bg"]
+            f = tk.Frame(parent, bg=row_bg)
+            f.pack(fill="x", padx=14, pady=0)
+            inner = tk.Frame(f, bg=row_bg)
+            inner.pack(fill="x", padx=6, pady=5)
+            tk.Label(inner, text=label, bg=row_bg, fg=C["muted"],
+                     width=18, anchor="w",
+                     font=("Segoe UI", 9)).pack(side="left")
+            return inner
 
         # label
         lbl_var = tk.StringVar()
-        f1 = row(dlg, "Field Label *")
-        ttk.Entry(f1, textvariable=lbl_var, width=28).pack(side="left")
+        f1 = row(dlg, "Field Label *", idx=0)
+        ttk.Entry(f1, textvariable=lbl_var, width=28).pack(side="left", fill="x", expand=True)
 
         # type
         type_var = tk.StringVar(value="text")
-        f2 = row(dlg, "Field Type")
+        f2 = row(dlg, "Field Type", idx=1)
         ttk.Combobox(f2, textvariable=type_var,
                      values=["text", "dropdown", "number", "date"],
                      state="readonly", width=14).pack(side="left")
 
         # default
         def_var = tk.StringVar()
-        f3 = row(dlg, "Default Value")
-        ttk.Entry(f3, textvariable=def_var, width=28).pack(side="left")
+        f3 = row(dlg, "Default Value", idx=2)
+        ttk.Entry(f3, textvariable=def_var, width=28).pack(side="left", fill="x", expand=True)
 
         # dropdown choices (shown when type=dropdown)
         choices_var = tk.StringVar()
-        f4 = row(dlg, "Choices (csv)")
+        f4 = row(dlg, "Choices (csv)", idx=3)
         choices_entry = ttk.Entry(f4, textvariable=choices_var, width=28)
 
         def _on_type(*_):
@@ -1451,20 +1490,19 @@ class FieldManagerDialog(tk.Toplevel):
 
         # jira key
         jira_key_var = tk.StringVar()
-        f5 = row(dlg, "Jira Field Key")
-        ttk.Entry(f5, textvariable=jira_key_var, width=28).pack(side="left")
-        tk.Label(dlg, text="Leave blank to exclude from Jira ticket",
-                 bg=C["bg"], fg=C["muted"], font=("Segoe UI", 8)
-                 ).pack(anchor="w", padx=36)
+        f5 = row(dlg, "Jira Field Key", idx=4)
+        ttk.Entry(f5, textvariable=jira_key_var, width=28).pack(side="left", fill="x", expand=True)
 
         # show label in Jira
         show_lbl_new = tk.BooleanVar(value=True)
-        f6 = row(dlg, "Show Label in Jira")
-        tk.Checkbutton(f6, variable=show_lbl_new, bg=C["bg"], fg=C["text"],
-                       selectcolor=C["cb_sel"], activebackground=C["bg"],
-                       activeforeground=C["text"], relief="flat").pack(side="left")
-        tk.Label(f6, text="(show 'FieldName: value' in Jira description)",
-                 bg=C["bg"], fg=C["muted"], font=("Segoe UI", 8)).pack(side="left", padx=6)
+        f6 = row(dlg, "Show Label in Jira", idx=5)
+        tk.Checkbutton(f6, variable=show_lbl_new, bg=C["bg"] if 5 % 2 else C["card"],
+                       fg=C["text"], selectcolor=C["cb_sel"],
+                       activebackground=C["bg"], activeforeground=C["text"],
+                       relief="flat").pack(side="left")
+        tk.Label(f6, text="show 'Label: value' in Jira description",
+                 bg=C["bg"] if 5 % 2 else C["card"],
+                 fg=C["muted"], font=("Segoe UI", 8)).pack(side="left", padx=6)
 
         def _create():
             label = lbl_var.get().strip()
@@ -1490,16 +1528,18 @@ class FieldManagerDialog(tk.Toplevel):
             self._render_rows()
             dlg.destroy()
 
-        brow = tk.Frame(dlg, bg=C["bg"])
-        brow.pack(fill="x", padx=20, pady=20)
-        tk.Button(brow, text="Add Field",
-                  bg=C["green"], fg="#0d1117", relief="flat",
-                  font=("Segoe UI", 10, "bold"), padx=14, pady=5,
-                  cursor="hand2", command=_create).pack(side="right")
-        tk.Button(brow, text="Cancel",
-                  bg=C["red"], fg="#ffffff", relief="flat",
-                  font=("Segoe UI", 10), padx=12, pady=5,
-                  activebackground="#c0392b", cursor="hand2",
+        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x")
+        brow = tk.Frame(dlg, bg=C["surface"])
+        brow.pack(fill="x", padx=16, pady=12)
+        tk.Button(brow, text="⊕  Add Field",
+                  bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=14, pady=6,
+                  cursor="hand2", activebackground="#2ea043",
+                  command=_create).pack(side="right")
+        tk.Button(brow, text="✕  Cancel",
+                  bg=C["card2"], fg=C["muted"], relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground=C["border"], cursor="hand2",
                   command=dlg.destroy).pack(side="right", padx=(0, 8))
 
     def _edit_choices_dialog(self, fd, combobox, def_var):
@@ -1549,12 +1589,12 @@ class FieldManagerDialog(tk.Toplevel):
             dlg.destroy()
 
         br = tk.Frame(dlg, bg=C["bg"]); br.pack(fill="x", padx=16, pady=(0, 14))
-        tk.Button(br, text="Save", bg=C["green"], fg="#0d1117", relief="flat",
-                  font=("Segoe UI", 10, "bold"), padx=14, pady=5,
+        tk.Button(br, text="✦  Save", bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=14, pady=6,
                   cursor="hand2", command=_save).pack(side="right")
-        tk.Button(br, text="Cancel", bg=C["red"], fg="#ffffff", relief="flat",
-                  font=("Segoe UI", 10), padx=12, pady=5,
-                  activebackground="#c0392b", cursor="hand2",
+        tk.Button(br, text="✕  Cancel", bg=C["card2"], fg=C["muted"], relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground=C["border"], cursor="hand2",
                   command=dlg.destroy).pack(side="right", padx=(0, 8))
 
     def _apply(self):
@@ -1645,21 +1685,26 @@ class DiffViewPopup(tk.Toplevel):
     # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build(self, filename, patch, status, adds, dels):
+        # ── top accent stripe ─────────────────────────────────────────────────
+        tk.Frame(self, bg=C["accent"], height=3).pack(fill="x")
+
         # ── header bar ───────────────────────────────────────────────────────
         hdr = tk.Frame(self, bg=C["surface"])
         hdr.pack(fill="x")
         tk.Frame(hdr, bg=C["accent"], width=4).pack(side="left", fill="y")
-        tk.Label(hdr, text=f"  {filename}",
-                 bg=C["surface"], fg=C["text"],
-                 font=("Consolas", 11, "bold")).pack(side="left", padx=8, pady=8)
+        hdr_inner = tk.Frame(hdr, bg=C["surface"])
+        hdr_inner.pack(side="left", padx=(10, 0), pady=10)
         badge_bg = STATUS_BADGE.get(status, C["surface"])
-        tk.Label(hdr, text=f"  {STATUS_EMOJI.get(status,'~')} {status.upper()}  ",
+        tk.Label(hdr_inner, text=f" {STATUS_EMOJI.get(status,'~')} {status.upper()} ",
                  bg=badge_bg, fg="#ffffff",
-                 font=("Segoe UI", 9, "bold"), padx=4).pack(side="left", padx=(0, 10))
+                 font=("Segoe UI", 8, "bold"), padx=4).pack(side="left", padx=(0, 10))
+        tk.Label(hdr_inner, text=f"{filename}",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Consolas", 10, "bold")).pack(side="left")
         sfg = C["green"] if adds > dels else C["red"] if dels > adds else C["muted"]
-        tk.Label(hdr, text=f"+{adds}  −{dels}",
+        tk.Label(hdr, text=f"  +{adds}  −{dels}",
                  bg=C["surface"], fg=sfg,
-                 font=("Segoe UI", 9, "bold")).pack(side="left")
+                 font=("Segoe UI", 9, "bold")).pack(side="left", padx=4)
 
         # ── column labels ─────────────────────────────────────────────────────
         tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
@@ -1794,35 +1839,42 @@ class FileChangesPopup(tk.Toplevel):
         self._build()
 
     def _build(self):
+        # ── top accent stripe ─────────────────────────────────────────────────
+        tk.Frame(self, bg=C["accent"], height=3).pack(fill="x")
+
         bar = tk.Frame(self, bg=C["surface"])
         bar.pack(fill="x")
         tk.Frame(bar, bg=C["accent"], width=4).pack(side="left", fill="y")
         hdr_f = tk.Frame(bar, bg=C["surface"])
-        hdr_f.pack(side="left", padx=14, pady=10, fill="x", expand=True)
-        tk.Label(hdr_f,
-                 text=f"{len(self._files)} files changed",
+        hdr_f.pack(side="left", padx=14, pady=12, fill="x", expand=True)
+        hdr_row = tk.Frame(hdr_f, bg=C["surface"])
+        hdr_row.pack(anchor="w")
+        tk.Label(hdr_row, text="◈", bg=C["surface"], fg=C["accent"],
+                 font=("Segoe UI", 14)).pack(side="left", padx=(0, 8))
+        tk.Label(hdr_row,
+                 text=f"{len(self._files)} Files Changed",
                  bg=C["surface"], fg=C["text"],
                  font=("Segoe UI", 13, "bold")).pack(side="left")
         tk.Label(hdr_f,
-                 text="   Sorted by dependency  •  Change Description → Word doc  •  Jira Comment → Jira ticket",
+                 text="Sorted by dependency  •  Change Description → Word doc  •  Jira Comment → Jira ticket",
                  bg=C["surface"], fg=C["muted"],
-                 font=("Segoe UI", 9)).pack(side="left", pady=(3, 0))
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
 
-        for lbl, st, abg, afg in [
-            ("Select All",   True,  C["accent"],  "#ffffff"),
-            ("Deselect All", False, C["orange"],  "#0d1117"),
+        for lbl, st, abg, afg, aabg in [
+            ("✓  Select All",   True,  C["accent"],      "#ffffff",   C["hover"]),
+            ("✕  Deselect All", False, C["accent_dim"],  C["accent"], C["border"]),
         ]:
             tk.Button(bar, text=lbl,
                       bg=abg, fg=afg, relief="flat",
-                      font=("Segoe UI", 9, "bold"), padx=10, pady=4,
-                      activebackground=C["border"], cursor="hand2",
+                      font=("Segoe UI", 9, "bold"), padx=10, pady=6,
+                      activebackground=aabg, cursor="hand2",
                       command=lambda s=st: self._toggle_all(s)
                       ).pack(side="right", padx=4, pady=10)
 
-        tk.Button(bar, text="Reset Step Comments",
-                  bg=C["yellow"], fg="#0d1117", relief="flat",
-                  font=("Segoe UI", 9, "bold"), padx=10, pady=4,
-                  activebackground=C["orange"], cursor="hand2",
+        tk.Button(bar, text="↺  Reset Comments",
+                  bg=C["card2"], fg=C["yellow"], relief="flat",
+                  font=("Segoe UI", 9, "bold"), padx=10, pady=6,
+                  activebackground=C["border"], cursor="hand2",
                   command=self._reset_step_comments
                   ).pack(side="right", padx=4, pady=10)
 
@@ -2145,26 +2197,33 @@ class SqlFilePopup(tk.Toplevel):
     # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build(self):
+        # ── top accent stripe ─────────────────────────────────────────────────
+        tk.Frame(self, bg=C["yellow"], height=3).pack(fill="x")
+
         bar = tk.Frame(self, bg=C["surface"])
         bar.pack(fill="x")
         tk.Frame(bar, bg=C["yellow"], width=4).pack(side="left", fill="y")
         hf = tk.Frame(bar, bg=C["surface"])
-        hf.pack(side="left", padx=14, pady=10, fill="x", expand=True)
-        tk.Label(hf, text="SQL PR File",
-                 bg=C["surface"], fg=C["yellow"],
+        hf.pack(side="left", padx=14, pady=12, fill="x", expand=True)
+        hf_row = tk.Frame(hf, bg=C["surface"])
+        hf_row.pack(anchor="w")
+        tk.Label(hf_row, text="⊞", bg=C["surface"], fg=C["yellow"],
+                 font=("Segoe UI", 14)).pack(side="left", padx=(0, 8))
+        tk.Label(hf_row, text="SQL PR File",
+                 bg=C["surface"], fg=C["text"],
                  font=("Segoe UI", 13, "bold")).pack(side="left")
         tk.Label(hf,
-                 text="   Files sorted by dependency  •  Edit SQL comment per file  "
+                 text="Files sorted by dependency  •  Edit SQL comment per file  "
                       "•  Combined into one runnable .sql script",
                  bg=C["surface"], fg=C["muted"],
-                 font=("Segoe UI", 9)).pack(side="left")
-        for lbl, st, abg, afg in [
-            ("Select All",   True,  C["accent"], "#ffffff"),
-            ("Deselect All", False, C["orange"], "#0d1117"),
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        for lbl, st, abg, afg, aabg in [
+            ("✓  Select All",   True,  C["accent"],      "#ffffff", C["hover"]),
+            ("✕  Deselect All", False, C["accent_dim"],  C["accent"], C["border"]),
         ]:
             tk.Button(bar, text=lbl, bg=abg, fg=afg,
-                      relief="flat", font=("Segoe UI", 9, "bold"), padx=10, pady=4,
-                      activebackground=C["border"], cursor="hand2",
+                      relief="flat", font=("Segoe UI", 9, "bold"), padx=10, pady=6,
+                      activebackground=aabg, cursor="hand2",
                       command=lambda s=st: self._toggle_all(s)
                       ).pack(side="right", padx=4, pady=10)
 
@@ -2203,19 +2262,19 @@ class SqlFilePopup(tk.Toplevel):
                   activebackground="#9966cc",
                   command=self._browse).pack(side="left", padx=(6, 0))
 
-        btn_row = tk.Frame(bot, bg=C["surface"]); btn_row.pack(fill="x", padx=16, pady=(0, 12))
+        btn_row = tk.Frame(bot, bg=C["surface"]); btn_row.pack(fill="x", padx=16, pady=(4, 14))
         self._sv = tk.StringVar(value="")
         tk.Label(btn_row, textvariable=self._sv,
                  bg=C["surface"], fg=C["green"],
                  font=("Segoe UI", 9)).pack(side="left")
-        tk.Button(btn_row, text="Cancel",
-                  bg=C["red"], fg="#ffffff", relief="flat",
-                  font=("Segoe UI", 10), padx=12, pady=5, cursor="hand2",
-                  activebackground="#c0392b",
+        tk.Button(btn_row, text="✕  Cancel",
+                  bg=C["card2"], fg=C["muted"], relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6, cursor="hand2",
+                  activebackground=C["border"],
                   command=self.destroy).pack(side="right", padx=8)
-        tk.Button(btn_row, text="  Generate SQL File  ",
-                  bg=C["green"], fg="#0d1117", relief="flat",
-                  font=("Segoe UI", 10, "bold"), padx=14, pady=5, cursor="hand2",
+        tk.Button(btn_row, text="✦  Generate SQL File",
+                  bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=14, pady=6, cursor="hand2",
                   activebackground="#2ea043",
                   command=self._generate).pack(side="right", padx=4)
 
@@ -2538,8 +2597,8 @@ class App(tk.Tk):
         self._theme_name    = "dark"
 
         self.title(APP_NAME)
-        self.geometry("1060x940")
-        self.minsize(880, 720)
+        self.geometry("1140x960")
+        self.minsize(920, 740)
         self.configure(bg=C["bg"])
         self._apply_theme()
         self._load_app_icon()
@@ -2592,32 +2651,38 @@ class App(tk.Tk):
         s.configure("TLabel",  background=C["bg"], foreground=C["text"])
         s.configure("TEntry",
                     fieldbackground=C["inp"], foreground=C["text"],
-                    insertcolor=C["text"], bordercolor=C["border"],
-                    padding=(6, 4))
+                    insertcolor=C["accent"], bordercolor=C["border"],
+                    padding=(8, 6), relief="flat")
+        s.map("TEntry",
+              fieldbackground=[("focus", C["inp"])],
+              bordercolor=[("focus", C["accent"])])
         s.configure("TCombobox",
                     fieldbackground=C["inp"], foreground=C["text"],
-                    selectbackground=C["hover"], arrowcolor=C["accent"],
-                    padding=(4, 4))
+                    selectbackground=C["accent_dim"], arrowcolor=C["accent"],
+                    padding=(7, 5), relief="flat")
         s.map("TCombobox",
-              fieldbackground=[("readonly", C["inp"])],
-              foreground=[("readonly", C["text"])])
+              fieldbackground=[("readonly", C["inp"]), ("focus", C["inp"])],
+              foreground=[("readonly", C["text"])],
+              bordercolor=[("focus", C["accent"])])
         s.configure("TScrollbar",
-                    background=C["surface"], troughcolor=C["surface"],
-                    bordercolor=C["border"], arrowcolor=C["muted"],
-                    relief="flat")
+                    background=C["border"], troughcolor=C["bg"],
+                    bordercolor=C["bg"], arrowcolor=C["bg"],
+                    arrowsize=8, relief="flat", width=8)
+        s.map("TScrollbar",
+              background=[("active", C["accent"]), ("pressed", C["hover"])])
 
-        btn_text = "#ffffff" if C["tag"] == "dark" else "#ffffff"
         for name, bg, fg, active in [
-            ("Accent",  C["accent"],  "#ffffff", C["hover"]),
-            ("Success", C["green"],   "#ffffff", C["green"]),
-            ("Purple",  C["purple"],  "#ffffff", C["purple"]),
-            ("Orange",  C["orange"],  "#ffffff", C["orange"]),
-            ("Ghost",   C["surface"], C["muted"], C["border"]),
-            ("Danger",  C["red"],     "#ffffff", C["red"]),
+            ("Accent",   C["accent"],  "#ffffff", C["hover"]),
+            ("Success",  C["green"],   "#ffffff", "#2ea043"),
+            ("Purple",   C["purple"],  "#ffffff", "#a070e0"),
+            ("Orange",   C["orange"],  "#ffffff", "#c9952e"),
+            ("Ghost",    C["card2"],   C["muted"], C["border"]),
+            ("Danger",   C["red"],     "#ffffff", "#d03a30"),
+            ("Subtle",   C["accent_dim"], C["accent"], C["border"]),
         ]:
             s.configure(f"{name}.TButton",
                         background=bg, foreground=fg,
-                        padding=(14, 7), relief="flat",
+                        padding=(16, 8), relief="flat",
                         font=("Segoe UI", 10, "bold"),
                         borderwidth=0)
             s.map(f"{name}.TButton",
@@ -2637,7 +2702,7 @@ class App(tk.Tk):
                     troughcolor=C["border"],
                     background=C["accent"],
                     bordercolor=C["border"],
-                    thickness=6)
+                    thickness=4)
 
     # ── theme toggle ──────────────────────────────────────────────────────────
 
@@ -2697,61 +2762,66 @@ class App(tk.Tk):
     # ── UI root ───────────────────────────────────────────────────────────────
 
     def _build_ui(self):
+        # ── top accent stripe ─────────────────────────────────────────────────
+        top_stripe = tk.Frame(self, bg=C["accent"], height=3)
+        top_stripe.pack(fill="x")
+        # subtle multi-color right edge of stripe
+        stripe_r = tk.Frame(top_stripe, height=3, bg=C["purple"])
+        stripe_r.place(relx=0.7, rely=0, relwidth=0.15, relheight=1)
+        stripe_r2 = tk.Frame(top_stripe, height=3, bg=C["green"])
+        stripe_r2.place(relx=0.85, rely=0, relwidth=0.15, relheight=1)
+
         # ── header bar ────────────────────────────────────────────────────────
         hdr = tk.Frame(self, bg=C["surface"])
         hdr.pack(fill="x")
-        tk.Frame(hdr, bg=C["accent"], width=4).pack(side="left", fill="y")
 
         # logo / title
         title_f = tk.Frame(hdr, bg=C["surface"])
-        title_f.pack(side="left", padx=(12, 0), pady=8)
+        title_f.pack(side="left", padx=(14, 0), pady=9)
 
         # canvas-drawn prism icon
-        ico = tk.Canvas(title_f, width=38, height=38, bg=C["surface"],
+        ico = tk.Canvas(title_f, width=42, height=42, bg=C["surface"],
                         highlightthickness=0)
-        ico.pack(side="left", padx=(0, 8))
-        # dark rounded bg
-        ico.create_oval(2, 2, 36, 36, fill=C["card"], outline=C["border"], width=1)
-        # prism triangle
-        pts = [10, 6,  10, 32,  33, 19]
+        ico.pack(side="left", padx=(0, 10))
+        ico.create_oval(2, 2, 40, 40, fill=C["card"], outline=C["border"], width=1)
+        pts = [11, 7,  11, 35,  36, 21]
         ico.create_polygon(pts, fill=C["accent"], outline="#aad4ff", width=1)
-        # refracted rays
-        for dy, col in [(-8, C["green"]), (0, C["accent"]), (8, C["yellow"])]:
-            ico.create_line(33, 19, 37, 19 + dy, fill=col, width=2)
+        for dy, col in [(-9, C["green"]), (0, C["accent"]), (9, C["yellow"])]:
+            ico.create_line(36, 21, 41, 21 + dy, fill=col, width=2)
 
         # "PRism" — "PR" in accent, "ism" in text
         name_f = tk.Frame(title_f, bg=C["surface"])
         name_f.pack(side="left")
         tk.Label(name_f, text="PR",
                  bg=C["surface"], fg=C["accent"],
-                 font=("Segoe UI", 16, "bold")).pack(side="left")
+                 font=("Segoe UI", 17, "bold")).pack(side="left")
         tk.Label(name_f, text="ism",
                  bg=C["surface"], fg=C["text"],
-                 font=("Segoe UI", 16, "bold")).pack(side="left")
+                 font=("Segoe UI", 17, "bold")).pack(side="left")
         tk.Label(name_f, text=f"  —  {APP_SUBTITLE}",
                  bg=C["surface"], fg=C["muted"],
-                 font=("Segoe UI", 9)).pack(side="left", pady=(4, 0))
+                 font=("Segoe UI", 9)).pack(side="left", pady=(5, 0))
 
         # right-side controls
         ctrl_f = tk.Frame(hdr, bg=C["surface"])
-        ctrl_f.pack(side="right", padx=12, pady=10)
+        ctrl_f.pack(side="right", padx=14, pady=10)
 
-        theme_lbl = "   Light Mode   " if self._theme_name == "dark" else "   Dark Mode   "
-        theme_ico = "☀" if self._theme_name == "dark" else "\U0001f319"
+        theme_lbl = "  Light" if self._theme_name == "dark" else "  Dark"
+        theme_ico = "☀" if self._theme_name == "dark" else "🌙"
         tk.Button(ctrl_f, text=f"{theme_ico}{theme_lbl}",
-                  bg=C["purple"], fg="#ffffff",
+                  bg=C["card2"], fg=C["text"],
                   relief="flat", font=("Segoe UI", 9, "bold"),
-                  padx=8, pady=5, cursor="hand2",
-                  activebackground="#9966cc", activeforeground="#ffffff",
+                  padx=10, pady=6, cursor="hand2",
+                  activebackground=C["border"], activeforeground=C["text"],
                   command=self._toggle_theme).pack(side="right", padx=(6, 0))
 
-        for txt, cmd, bg, fg in [
-            (" ⚡ Manage Fields ", self._open_field_mgr, C["purple"],  "#ffffff"),
-            ("  ⚙ Settings  ",    self._open_settings,  C["orange"],  "#0d1117"),
+        for txt, cmd, bg, fg, abg in [
+            ("⊞  Fields",   self._open_field_mgr, C["accent_dim"],  C["accent"], C["border"]),
+            ("⚙  Settings", self._open_settings,  C["card2"],        C["muted"],  C["border"]),
         ]:
             tk.Button(ctrl_f, text=txt, bg=bg, fg=fg, relief="flat",
-                      font=("Segoe UI", 9, "bold"), padx=8, pady=5,
-                      activebackground=C["border"], activeforeground=C["text"],
+                      font=("Segoe UI", 9, "bold"), padx=10, pady=6,
+                      activebackground=abg, activeforeground=C["text"],
                       cursor="hand2", command=cmd).pack(side="right", padx=3)
 
         tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
@@ -2769,16 +2839,17 @@ class App(tk.Tk):
         tk.Frame(sbar, bg=C["border"], height=1).pack(fill="x")
         sbar_inner = tk.Frame(sbar, bg=C["surface"])
         sbar_inner.pack(fill="x")
-        tk.Label(sbar_inner, text="●",
+        self._status_dot = tk.Label(sbar_inner, text="●",
                  bg=C["surface"], fg=C["green"],
-                 font=("Segoe UI", 8)).pack(side="left", padx=(10, 4), pady=5)
+                 font=("Segoe UI", 8))
+        self._status_dot.pack(side="left", padx=(12, 4), pady=6)
         tk.Label(sbar_inner, textvariable=self.status_var,
                  bg=C["surface"], fg=C["muted"],
                  font=("Segoe UI", 9)).pack(side="left")
-        tk.Label(sbar_inner,
-                 text=f"  {self._theme_name.capitalize()} mode",
+        tk.Frame(sbar_inner, bg=C["border"], width=1).pack(side="right", fill="y", pady=3)
+        tk.Label(sbar_inner, text=f"PRism  •  {self._theme_name.capitalize()}",
                  bg=C["surface"], fg=C["muted"],
-                 font=("Segoe UI", 8, "italic")).pack(side="right", padx=12, pady=5)
+                 font=("Segoe UI", 8)).pack(side="right", padx=14, pady=6)
 
     # ── scrollable frame helper ───────────────────────────────────────────────
 
@@ -2798,22 +2869,25 @@ class App(tk.Tk):
 
     def _card(self, parent, title="", icon="", accent_color=None):
         accent_color = accent_color or C["accent"]
-        border_f = tk.Frame(parent, bg=C["border"])
-        border_f.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        # outer shadow frame for depth effect
+        shadow_f = tk.Frame(parent, bg=C["shadow"])
+        shadow_f.pack(fill="both", expand=True, padx=(10, 8), pady=(0, 10))
+        border_f = tk.Frame(shadow_f, bg=C["border"])
+        border_f.pack(fill="both", expand=True, padx=0, pady=0)
         inner_wrap = tk.Frame(border_f, bg=C["card"])
         inner_wrap.pack(fill="both", expand=True, padx=1, pady=1)
-        accent_strip = tk.Frame(inner_wrap, bg=accent_color, width=3)
+        accent_strip = tk.Frame(inner_wrap, bg=accent_color, width=4)
         accent_strip.pack(side="left", fill="y")
         content = tk.Frame(inner_wrap, bg=C["card"])
-        content.pack(side="left", fill="both", expand=True, padx=12, pady=10)
+        content.pack(side="left", fill="both", expand=True, padx=14, pady=12)
         if title:
             th = tk.Frame(content, bg=C["card"])
-            th.pack(fill="x", pady=(0, 8))
+            th.pack(fill="x", pady=(0, 6))
             if icon:
                 tk.Label(th, text=icon, bg=C["card"], fg=accent_color,
-                         font=("Segoe UI", 11)).pack(side="left", padx=(0, 6))
+                         font=("Segoe UI", 12)).pack(side="left", padx=(0, 7))
             tk.Label(th, text=title, bg=C["card"], fg=C["text"],
-                     font=("Segoe UI", 10, "bold")).pack(side="left")
+                     font=("Segoe UI", 11, "bold")).pack(side="left")
             tk.Frame(content, bg=C["border"], height=1).pack(fill="x", pady=(0, 10))
         return content
 
@@ -2824,40 +2898,56 @@ class App(tk.Tk):
         outer.pack(fill="both", expand=True)
 
         # ── Right sidebar: actions ────────────────────────────────────────────
-        sidebar = tk.Frame(outer, bg=C["surface"], width=190)
+        sidebar = tk.Frame(outer, bg=C["surface"], width=210)
         sidebar.pack(side="right", fill="y")
         sidebar.pack_propagate(False)
         tk.Frame(sidebar, bg=C["border"], width=1).pack(side="left", fill="y")
         rp = tk.Frame(sidebar, bg=C["surface"])
-        rp.pack(side="left", fill="both", expand=True, padx=12, pady=14)
+        rp.pack(side="left", fill="both", expand=True, padx=14, pady=16)
 
-        tk.Label(rp, text="ACTIONS", bg=C["surface"], fg=C["muted"],
-                 font=("Segoe UI", 7, "bold")).pack(anchor="w", pady=(0, 10))
+        # section header
+        sh_f = tk.Frame(rp, bg=C["surface"])
+        sh_f.pack(fill="x", pady=(0, 12))
+        tk.Frame(sh_f, bg=C["accent"], width=3).pack(side="left", fill="y", padx=(0, 7))
+        tk.Label(sh_f, text="ACTIONS", bg=C["surface"], fg=C["accent"],
+                 font=("Segoe UI", 8, "bold")).pack(side="left", anchor="w")
 
-        prev_btn = ttk.Button(rp, text="Preview Doc", style="Orange.TButton",
+        prev_btn = ttk.Button(rp, text="◈  Preview Doc", style="Orange.TButton",
                               command=self._show_preview)
-        prev_btn.pack(fill="x", pady=(0, 6))
+        prev_btn.pack(fill="x", pady=(0, 2))
         Tooltip(prev_btn, "Add change comments and generate the Word document.")
+        tk.Label(rp, text="Generate Word doc", bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 7)).pack(anchor="w", padx=2, pady=(0, 8))
 
-        self.sql_btn = ttk.Button(rp, text="SQL PR File", style="Accent.TButton",
+        self.sql_btn = ttk.Button(rp, text="⊞  SQL PR File", style="Accent.TButton",
                                   state="disabled", command=self._open_sql_popup)
-        self.sql_btn.pack(fill="x", pady=(0, 6))
+        self.sql_btn.pack(fill="x", pady=(0, 2))
         Tooltip(self.sql_btn, "Combine all PR SQL files into a single runnable script.")
+        tk.Label(rp, text="Combine SQL scripts", bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 7)).pack(anchor="w", padx=2, pady=(0, 8))
 
-        jira_btn = ttk.Button(rp, text="Create Jira Ticket", style="Success.TButton",
+        jira_btn = ttk.Button(rp, text="✦  Create Jira Ticket", style="Success.TButton",
                               command=self._create_jira_thread)
-        jira_btn.pack(fill="x", pady=(0, 14))
+        jira_btn.pack(fill="x", pady=(0, 2))
         Tooltip(jira_btn, "Create Jira ticket and attach Word doc + SQL file.")
+        tk.Label(rp, text="Post to Jira + attach files", bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 7)).pack(anchor="w", padx=2, pady=(0, 14))
 
-        tk.Frame(rp, bg=C["border"], height=1).pack(fill="x", pady=(0, 10))
+        tk.Frame(rp, bg=C["border"], height=1).pack(fill="x", pady=(0, 12))
 
         self.progress = ttk.Progressbar(rp, mode="indeterminate")
         self.progress.pack(fill="x", pady=(0, 8))
 
         self.result_var = tk.StringVar()
-        rl = tk.Label(rp, textvariable=self.result_var,
-                      bg=C["surface"], fg=C["green"],
-                      font=("Segoe UI", 8, "bold"), wraplength=160,
+        result_card = tk.Frame(rp, bg=C["card"],
+                               highlightthickness=1,
+                               highlightbackground=C["border"])
+        result_card.pack(fill="x", pady=(4, 0))
+        result_inner = tk.Frame(result_card, bg=C["card"])
+        result_inner.pack(fill="x", padx=8, pady=6)
+        rl = tk.Label(result_inner, textvariable=self.result_var,
+                      bg=C["card"], fg=C["green"],
+                      font=("Segoe UI", 8, "bold"), wraplength=170,
                       justify="left", cursor="hand2")
         rl.pack(anchor="w")
         rl.bind("<Button-1>", lambda e: self._jira_url and webbrowser.open(self._jira_url))
@@ -2867,12 +2957,28 @@ class App(tk.Tk):
         lp.pack(side="left", fill="both", expand=True)
 
         def _sep():
-            tk.Frame(lp, bg=C["border"], height=1).pack(fill="x", padx=12, pady=5)
+            tk.Frame(lp, bg=C["border"], height=1).pack(fill="x", padx=14, pady=(6, 0))
+            tk.Frame(lp, bg=C["bg"], height=4).pack(fill="x")
 
-        def _sh(parent, text):
-            tk.Label(parent, text=text, bg=C["bg"], fg=C["accent"],
-                     font=("Segoe UI", 7, "bold")).pack(anchor="w", padx=14, pady=(6, 2))
+        _SH_ICONS = {
+            "GITHUB": "⎇", "DESCRIPTION": "✐", "JIRA": "⊡",
+            "ISSUE": "≋", "SQL": "⊞", "CODE": "◈",
+        }
+        def _sh(parent, text, accent=None):
+            clr = accent or C["accent"]
+            icon = next((v for k, v in _SH_ICONS.items() if k in text), "")
+            f = tk.Frame(parent, bg=C["bg"])
+            f.pack(fill="x", padx=10, pady=(10, 3))
+            tk.Frame(f, bg=clr, width=3).pack(side="left", fill="y",
+                                               padx=(2, 8))
+            if icon:
+                tk.Label(f, text=icon, bg=C["bg"], fg=clr,
+                         font=("Segoe UI", 9, "bold")).pack(side="left",
+                                                            padx=(0, 5))
+            tk.Label(f, text=text, bg=C["bg"], fg=clr,
+                     font=("Segoe UI", 8, "bold")).pack(side="left", anchor="w")
 
+        _frow_count = [0]
         def _frow(parent, fd):
             key = fd["key"]; label = fd["label"]
             ftype = fd.get("type","text"); choices = fd.get("choices",[])
@@ -2881,33 +2987,47 @@ class App(tk.Tk):
                 default = self.config_data.get("jira_project_key", fd.get("default",""))
             else:
                 default = fd.get("default","")
-            fr = tk.Frame(parent, bg=C["bg"]); fr.pack(fill="x", padx=12, pady=2)
-            lf = tk.Frame(fr, bg=C["bg"], width=115); lf.pack(side="left", fill="y")
+            _frow_count[0] += 1
+            row_bg = C["card"] if _frow_count[0] % 2 == 0 else C["bg"]
+            fr = tk.Frame(parent, bg=row_bg)
+            fr.pack(fill="x", padx=10, pady=0)
+            pad_f = tk.Frame(fr, bg=row_bg)
+            pad_f.pack(fill="x", padx=4, pady=(2, 2))
+            lf = tk.Frame(pad_f, bg=row_bg, width=132)
+            lf.pack(side="left", fill="y")
             lf.pack_propagate(False)
-            lbl_w = tk.Label(lf, text=f"{label}{'*' if req else ''}",
-                             bg=C["bg"], fg=C["text"],
-                             font=("Segoe UI", 9, "bold" if req else "normal"), anchor="w")
-            lbl_w.pack(anchor="w", pady=3)
+            lbl_txt = label
+            lbl_fg  = C["text"] if req else C["muted"]
+            lbl_w = tk.Label(lf, text=lbl_txt,
+                             bg=row_bg, fg=lbl_fg,
+                             font=("Segoe UI", 9, "bold" if req else "normal"),
+                             anchor="w")
+            lbl_w.pack(side="left", anchor="w", pady=4)
+            if req:
+                tk.Label(lf, text=" ●", bg=row_bg, fg=C["accent"],
+                         font=("Segoe UI", 7)).pack(side="left", anchor="w")
             hint = FIELD_HINTS.get(key, "")
             if hint:
                 Tooltip(lbl_w, hint)
             var = tk.StringVar(value=default)
             if ftype == "dropdown" and choices:
-                w = ttk.Combobox(fr, textvariable=var, values=choices, state="readonly")
+                w = ttk.Combobox(pad_f, textvariable=var, values=choices,
+                                 state="readonly")
             else:
-                w = ttk.Entry(fr, textvariable=var)
+                w = ttk.Entry(pad_f, textvariable=var)
             w.pack(side="left", fill="x", expand=True)
             if key == "doc_name":
-                tk.Button(fr, text="Browse", bg=C["purple"], fg="#ffffff",
-                          relief="flat", font=("Segoe UI", 8, "bold"), padx=6, pady=2,
-                          activebackground="#9966cc", cursor="hand2",
+                tk.Button(pad_f, text="⊞", bg=C["purple"], fg="#ffffff",
+                          relief="flat", font=("Segoe UI", 9, "bold"), padx=7, pady=4,
+                          activebackground="#a060cc", cursor="hand2",
                           command=self._choose_doc_dir).pack(side="left", padx=(4, 0))
             if ftype == "dropdown":
                 def _edit(fd=fd, cb=w, v=var):
                     self._edit_dropdown_choices(fd, cb, v)
-                tk.Button(fr, text="✎", bg=C["bg"], fg=C["accent"], relief="flat",
-                          font=("Segoe UI", 9), padx=4, activebackground=C["border"],
-                          cursor="hand2", command=_edit).pack(side="left", padx=(2, 0))
+                tk.Button(pad_f, text="✎", bg=row_bg, fg=C["accent"], relief="flat",
+                          font=("Segoe UI", 9), padx=5, pady=4,
+                          activebackground=C["border"],
+                          cursor="hand2", command=_edit).pack(side="left", padx=(3, 0))
             return var
 
         # ── PR URL ────────────────────────────────────────────────────────────
@@ -2915,25 +3035,34 @@ class App(tk.Tk):
         pr_row = tk.Frame(lp, bg=C["bg"]); pr_row.pack(fill="x", padx=12, pady=(0, 3))
         lf = tk.Frame(pr_row, bg=C["bg"], width=115); lf.pack(side="left", fill="y")
         lf.pack_propagate(False)
-        lbl = tk.Label(lf, text="PR URL / Number", bg=C["bg"], fg=C["text"],
+        lbl = tk.Label(lf, text="PR URL / Number", bg=C["bg"], fg=C["muted"],
                        font=("Segoe UI", 9), anchor="w")
-        lbl.pack(anchor="w", pady=3)
+        lbl.pack(anchor="w", pady=4)
         Tooltip(lbl, "Paste full GitHub PR URL or just the number (e.g. 42)")
         self.pr_url_var = tk.StringVar()
         ttk.Entry(pr_row, textvariable=self.pr_url_var).pack(
             side="left", fill="x", expand=True, padx=(0, 6))
-        ttk.Button(pr_row, text="Fetch PR", style="Accent.TButton",
+        ttk.Button(pr_row, text="↓  Fetch PR", style="Accent.TButton",
                    command=self._fetch_pr_thread).pack(side="left", padx=(0, 4))
-        ttk.Button(pr_row, text="⚗ Test Data", style="Orange.TButton",
+        ttk.Button(pr_row, text="⚗  Test Data", style="Ghost.TButton",
                    command=self._load_mock_data).pack(side="left")
 
-        info_f = tk.Frame(lp, bg=C["bg"]); info_f.pack(fill="x", padx=14, pady=(0, 2))
+        info_outer = tk.Frame(lp, bg=C["bg"])
+        info_outer.pack(fill="x", padx=12, pady=(3, 2))
+        info_f = tk.Frame(info_outer, bg=C["card"],
+                          highlightthickness=1,
+                          highlightbackground=C["border"])
+        info_f.pack(fill="x")
+        info_inner = tk.Frame(info_f, bg=C["card"])
+        info_inner.pack(fill="x", padx=10, pady=6)
         self.pr_info_var = tk.StringVar(
             value="No PR loaded — enter a PR URL or number above")
-        tk.Label(info_f, textvariable=self.pr_info_var, bg=C["bg"], fg=C["muted"],
+        tk.Label(info_inner, textvariable=self.pr_info_var,
+                 bg=C["card"], fg=C["muted"],
                  font=("Segoe UI", 8), anchor="w").pack(anchor="w")
         self.files_sum_var = tk.StringVar(value="")
-        tk.Label(info_f, textvariable=self.files_sum_var, bg=C["bg"], fg=C["green"],
+        tk.Label(info_inner, textvariable=self.files_sum_var,
+                 bg=C["card"], fg=C["green"],
                  font=("Segoe UI", 8, "bold"), anchor="w").pack(anchor="w")
 
         _sep()
@@ -2941,18 +3070,26 @@ class App(tk.Tk):
         # ── Description (compact) ─────────────────────────────────────────────
         _sh(lp, "DESCRIPTION")
         self.desc_text = scrolledtext.ScrolledText(
-            lp, height=3, bg=C["inp"], fg=C["muted"],
+            lp, height=4, bg=C["inp"], fg=C["muted"],
             insertbackground=C["text"], relief="flat",
             font=("Segoe UI", 9), wrap="word", selectbackground=C["hover"],
             highlightthickness=1, highlightbackground=C["border"],
-            highlightcolor=C["accent"])
+            highlightcolor=C["accent"], padx=8, pady=6)
         self.desc_text.pack(fill="x", padx=12, pady=(0, 4))
-        self.desc_text.insert("1.0", "Describe the issue in detail...")
+        _PLACEHOLDER = "Describe the issue in detail..."
+        self.desc_text.insert("1.0", _PLACEHOLDER)
         def _clr(e):
-            if self.desc_text.get("1.0", "end-1c") == "Describe the issue in detail...":
+            if self.desc_text.get("1.0", "end-1c") == _PLACEHOLDER:
                 self.desc_text.delete("1.0", "end")
-                self.desc_text.config(fg=C["text"])
+                self.desc_text.config(fg=C["text"],
+                                      highlightbackground=C["accent"])
+        def _restore(e):
+            if not self.desc_text.get("1.0", "end-1c").strip():
+                self.desc_text.insert("1.0", _PLACEHOLDER)
+                self.desc_text.config(fg=C["muted"],
+                                      highlightbackground=C["border"])
         self.desc_text.bind("<FocusIn>", _clr)
+        self.desc_text.bind("<FocusOut>", _restore)
 
         _sep()
 
@@ -2963,7 +3100,8 @@ class App(tk.Tk):
         id_col = tk.Frame(mid, bg=C["bg"]); id_col.pack(side="left", fill="both", expand=True)
 
         # Jira Fields
-        _sh(jf_col, "JIRA FIELDS")
+        _frow_count[0] = 0
+        _sh(jf_col, "JIRA FIELDS", accent=C["accent"])
         self._jira_field_widgets = {}
         for fd in [fd for fd in self.config_data["fields"]
                    if fd.get("jira_field") and fd.get("enabled", True)]:
@@ -2997,7 +3135,8 @@ class App(tk.Tk):
             self._jira_field_widgets["summary"].trace_add("write", _on_sum)
 
         # Issue Details
-        _sh(id_col, "ISSUE DETAILS")
+        _frow_count[0] = 0
+        _sh(id_col, "ISSUE DETAILS", accent=C["purple"])
         self._fields_card_parent = id_col
         self._fields_card = None
         self._rebuild_fields_card()
@@ -3136,20 +3275,27 @@ class App(tk.Tk):
         enabled = [fd for fd in self.config_data["fields"]
                    if fd.get("enabled", True) and not fd.get("jira_field")]
 
-        for fd in enabled:
+        for idx, fd in enumerate(enabled):
             key = fd["key"]; label = fd["label"]
             ftype = fd.get("type","text"); choices = fd.get("choices",[])
             default = fd.get("default",""); req = fd.get("required", False)
+            row_bg = C["card"] if idx % 2 == 0 else C["bg"]
 
-            row = tk.Frame(flat, bg=C["bg"]); row.pack(fill="x", padx=12, pady=2)
-            lf  = tk.Frame(row, bg=C["bg"], width=115); lf.pack(side="left", fill="y")
+            outer = tk.Frame(flat, bg=row_bg)
+            outer.pack(fill="x", padx=10, pady=0)
+            row = tk.Frame(outer, bg=row_bg)
+            row.pack(fill="x", padx=4, pady=(2, 2))
+            lf  = tk.Frame(row, bg=row_bg, width=132); lf.pack(side="left", fill="y")
             lf.pack_propagate(False)
 
-            lbl_w = tk.Label(lf, text=f"{label}{'*' if req else ''}",
-                             bg=C["bg"], fg=C["text"],
+            lbl_w = tk.Label(lf, text=label,
+                             bg=row_bg, fg=C["text"] if req else C["muted"],
                              font=("Segoe UI", 9, "bold" if req else "normal"),
                              anchor="w")
-            lbl_w.pack(anchor="w", pady=3)
+            lbl_w.pack(side="left", anchor="w", pady=4)
+            if req:
+                tk.Label(lf, text=" ●", bg=row_bg, fg=C["purple"],
+                         font=("Segoe UI", 7)).pack(side="left", anchor="w")
             hint = FIELD_HINTS.get(key, "")
             if hint:
                 Tooltip(lbl_w, hint)
@@ -3162,18 +3308,18 @@ class App(tk.Tk):
             w.pack(side="left", fill="x", expand=True)
 
             if key == "doc_name":
-                tk.Button(row, text="Browse", bg=C["purple"], fg="#ffffff",
-                          relief="flat", font=("Segoe UI", 8, "bold"), padx=6, pady=2,
-                          activebackground="#9966cc", cursor="hand2",
+                tk.Button(row, text="⊞", bg=C["purple"], fg="#ffffff",
+                          relief="flat", font=("Segoe UI", 9, "bold"), padx=7, pady=4,
+                          activebackground="#a060cc", cursor="hand2",
                           command=self._choose_doc_dir).pack(side="left", padx=(4, 0))
 
             if ftype == "dropdown":
                 def _edit_choices(fd=fd, cb=w, v=var):
                     self._edit_dropdown_choices(fd, cb, v)
-                tk.Button(row, text="✎", bg=C["bg"], fg=C["accent"],
-                          relief="flat", font=("Segoe UI", 9), padx=4,
+                tk.Button(row, text="✎", bg=row_bg, fg=C["purple"],
+                          relief="flat", font=("Segoe UI", 9), padx=5, pady=4,
                           activebackground=C["border"], cursor="hand2",
-                          command=_edit_choices).pack(side="left", padx=(2, 0))
+                          command=_edit_choices).pack(side="left", padx=(3, 0))
 
             self._field_widgets[key] = var
 
@@ -3181,25 +3327,34 @@ class App(tk.Tk):
     def _edit_dropdown_choices(self, fd, combobox, var):
         dlg = tk.Toplevel(self)
         dlg.title(f"Edit choices — {fd['label']}")
-        dlg.geometry("380x340")
+        dlg.geometry("400x360")
         dlg.configure(bg=C["bg"])
         dlg.grab_set()
         dlg.transient(self)
 
-        tk.Label(dlg, text=f"Choices for  \"{fd['label']}\"",
-                 bg=C["bg"], fg=C["accent"],
-                 font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=16, pady=(14, 4))
-        tk.Label(dlg, text="One value per line",
-                 bg=C["bg"], fg=C["muted"],
-                 font=("Segoe UI", 8)).pack(anchor="w", padx=16, pady=(0, 6))
+        tk.Frame(dlg, bg=C["accent"], height=3).pack(fill="x")
+        hdr = tk.Frame(dlg, bg=C["surface"])
+        hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C["accent"], width=4).pack(side="left", fill="y")
+        hdr_inner = tk.Frame(hdr, bg=C["surface"])
+        hdr_inner.pack(side="left", padx=12, pady=10)
+        tk.Label(hdr_inner, text=f"Edit Choices  —  {fd['label']}",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        tk.Label(hdr_inner, text="One value per line  •  Empty lines ignored",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x")
 
         txt = scrolledtext.ScrolledText(dlg, height=10,
                                         bg=C["inp"], fg=C["text"],
-                                        insertbackground=C["text"],
+                                        insertbackground=C["accent"],
                                         relief="flat", font=("Segoe UI", 10),
                                         highlightthickness=1,
-                                        highlightbackground=C["border"])
-        txt.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+                                        highlightbackground=C["border"],
+                                        highlightcolor=C["accent"],
+                                        padx=10, pady=8)
+        txt.pack(fill="both", expand=True, padx=14, pady=(10, 6))
         txt.insert("1.0", "\n".join(fd.get("choices", [])))
 
         def _save():
@@ -3214,12 +3369,12 @@ class App(tk.Tk):
             dlg.destroy()
 
         br = tk.Frame(dlg, bg=C["bg"]); br.pack(fill="x", padx=16, pady=(0, 14))
-        tk.Button(br, text="Save", bg=C["green"], fg="#0d1117", relief="flat",
-                  font=("Segoe UI", 10, "bold"), padx=14, pady=5,
+        tk.Button(br, text="✦  Save", bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=14, pady=6,
                   cursor="hand2", command=_save).pack(side="right")
-        tk.Button(br, text="Cancel", bg=C["red"], fg="#ffffff", relief="flat",
-                  font=("Segoe UI", 10), padx=12, pady=5,
-                  activebackground="#c0392b", cursor="hand2",
+        tk.Button(br, text="✕  Cancel", bg=C["card2"], fg=C["muted"], relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground=C["border"], cursor="hand2",
                   command=dlg.destroy).pack(side="right", padx=(0, 8))
 
     def _build_desc_card(self, parent):
@@ -3278,13 +3433,28 @@ class App(tk.Tk):
     def _open_settings(self):
         win = tk.Toplevel(self)
         win.title(f"{APP_NAME}  —  Settings")
-        win.geometry("640x540")
+        win.geometry("660x560")
         win.configure(bg=C["bg"])
         win.grab_set()
 
-        tk.Label(win, text="Connection Settings",
-                 bg=C["bg"], fg=C["accent"],
-                 font=("Segoe UI", 13, "bold")).pack(anchor="w", padx=24, pady=(18, 14))
+        # top accent stripe
+        tk.Frame(win, bg=C["orange"], height=3).pack(fill="x")
+        hdr = tk.Frame(win, bg=C["surface"])
+        hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C["orange"], width=4).pack(side="left", fill="y")
+        hdr_inner = tk.Frame(hdr, bg=C["surface"])
+        hdr_inner.pack(side="left", padx=14, pady=12)
+        hdr_row = tk.Frame(hdr_inner, bg=C["surface"])
+        hdr_row.pack(anchor="w")
+        tk.Label(hdr_row, text="⚙", bg=C["surface"], fg=C["orange"],
+                 font=("Segoe UI", 13)).pack(side="left", padx=(0, 8))
+        tk.Label(hdr_row, text="Connection Settings",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 13, "bold")).pack(side="left")
+        tk.Label(hdr_inner, text="GitHub and Jira API credentials  •  Output directory",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        tk.Frame(win, bg=C["border"], height=1).pack(fill="x")
 
         c = tk.Canvas(win, bg=C["bg"], highlightthickness=0)
         v = ttk.Scrollbar(win, orient="vertical", command=c.yview)
@@ -3297,23 +3467,31 @@ class App(tk.Tk):
         sf.bind("<Configure>", lambda e: c.configure(scrollregion=c.bbox("all")))
 
         defs = [
-            ("GitHub Token File",   "github_token_file"),
-            ("Jira Token File",     "jira_token_file"),
-            ("Jira Base URL",       "jira_base_url"),
-            ("Jira Project Key",    "jira_project_key"),
-            ("Jira Email",          "jira_email"),
-            ("GitHub Owner",        "github_owner"),
-            ("GitHub Repo",         "github_repo"),
-            ("Output Directory",    "word_doc_output_dir"),
+            ("GitHub Token File",   "github_token_file",   "⎇"),
+            ("Jira Token File",     "jira_token_file",     "⊡"),
+            ("Jira Base URL",       "jira_base_url",       "≋"),
+            ("Jira Project Key",    "jira_project_key",    "⊡"),
+            ("Jira Email",          "jira_email",          "≋"),
+            ("GitHub Owner",        "github_owner",        "⎇"),
+            ("GitHub Repo",         "github_repo",         "⎇"),
+            ("Output Directory",    "word_doc_output_dir", "⊞"),
         ]
         vars_ = {}
-        for label, key in defs:
-            row = tk.Frame(sf, bg=C["bg"]); row.pack(fill="x", padx=20, pady=5)
-            tk.Label(row, text=label, bg=C["bg"], fg=C["muted"],
-                     width=22, anchor="w", font=("Segoe UI", 10)).pack(side="left")
+        for idx, (label, key, icon) in enumerate(defs):
+            row_bg = C["card"] if idx % 2 == 0 else C["bg"]
+            row = tk.Frame(sf, bg=row_bg)
+            row.pack(fill="x", padx=16, pady=0)
+            inner = tk.Frame(row, bg=row_bg)
+            inner.pack(fill="x", padx=6, pady=5)
+            lbl_f = tk.Frame(inner, bg=row_bg)
+            lbl_f.pack(side="left")
+            tk.Label(lbl_f, text=icon, bg=row_bg, fg=C["accent"],
+                     font=("Segoe UI", 9), width=2).pack(side="left")
+            tk.Label(lbl_f, text=label, bg=row_bg, fg=C["muted"],
+                     width=20, anchor="w", font=("Segoe UI", 9)).pack(side="left")
             v2 = tk.StringVar(value=str(self.config_data.get(key, "")))
             vars_[key] = v2
-            ttk.Entry(row, textvariable=v2).pack(side="left", fill="x", expand=True)
+            ttk.Entry(inner, textvariable=v2).pack(side="left", fill="x", expand=True)
             if "file" in key or "dir" in key.lower():
                 is_dir = "dir" in key.lower()
                 def _browse(var=v2, d=is_dir):
@@ -3321,7 +3499,7 @@ class App(tk.Tk):
                         filedialog.askopenfilename(
                             filetypes=[("Text","*.txt"),("All","*.*")])
                     if p: var.set(p)
-                ttk.Button(row, text="...", style="Purple.TButton",
+                ttk.Button(inner, text="⊞", style="Subtle.TButton",
                            command=_browse).pack(side="left", padx=(6, 0))
 
         def _save():
@@ -3332,9 +3510,9 @@ class App(tk.Tk):
             win.destroy()
 
         br = tk.Frame(sf, bg=C["bg"]); br.pack(fill="x", padx=20, pady=20)
-        ttk.Button(br, text="Save Settings", style="Success.TButton",
+        ttk.Button(br, text="✦  Save Settings", style="Success.TButton",
                    command=_save).pack(side="right")
-        ttk.Button(br, text="Cancel", style="Danger.TButton",
+        ttk.Button(br, text="✕  Cancel", style="Ghost.TButton",
                    command=win.destroy).pack(side="right", padx=(0, 8))
 
     # ── Field manager ─────────────────────────────────────────────────────────
@@ -4061,8 +4239,17 @@ class App(tk.Tk):
         else:
             subprocess.run(["xdg-open", self._last_doc_path])
 
-    def _set_status(self, msg):
+    def _set_status(self, msg, color=None):
         self.status_var.set(msg)
+        if hasattr(self, "_status_dot"):
+            if color:
+                self._status_dot.config(fg=color)
+            elif any(w in msg.lower() for w in ("error", "failed", "not found")):
+                self._status_dot.config(fg=C["red"])
+            elif any(w in msg.lower() for w in ("fetching", "generating", "creating", "loading")):
+                self._status_dot.config(fg=C["yellow"])
+            else:
+                self._status_dot.config(fg=C["green"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
