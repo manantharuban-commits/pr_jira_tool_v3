@@ -22,7 +22,7 @@ from datetime import datetime
 import requests
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches, Cm
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -307,7 +307,9 @@ DEFAULT_CONFIG = {
     "jira_email":          "you@company.com",
     "github_owner":        "",
     "github_repo":         "",
+    "github_api_url":      "https://api.github.com",
     "word_doc_output_dir": BASE_DIR,
+    "ssl_cert_file":       os.path.join(BASE_DIR, "certs", "dummy.pem"),
     "fields":              BUILTIN_FIELDS,
     "field_defaults":      {},   # key → default_value overrides
 }
@@ -363,6 +365,13 @@ def jira_auth_headers(email, token):
     return {"Authorization": f"Basic {creds}",
             "Content-Type": "application/json", "Accept": "application/json"}
 
+def _ssl_verify(cfg):
+    """Return cert path for requests verify= param. Falls back to True if not set/found."""
+    p = (cfg or {}).get("ssl_cert_file", "")
+    if p and os.path.isfile(p):
+        return p
+    return True
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  SQL helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -397,6 +406,124 @@ def _detect_sql_object(filename, patch):
     return base
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Topological file sorter
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SQL_EXTS = {'.sql', '.prc', '.fnc', '.trg', '.pks', '.pkb', '.vw', '.typ', '.sps', '.spb'}
+
+_DDL_DEFINE = re.compile(
+    r'(?:CREATE|ALTER)\s+(?:OR\s+REPLACE\s+)?(?:FORCE\s+)?(?:EDITIONABLE\s+)?'
+    r'(?:TABLE|VIEW|MATERIALIZED\s+VIEW|PROCEDURE|PROC|FUNCTION|TRIGGER|'
+    r'PACKAGE(?:\s+BODY)?|SEQUENCE|TYPE(?:\s+BODY)?|SYNONYM|INDEX)\s+'
+    r'(?:\w+\.)?(\w+)',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Word boundary: Oracle identifiers use [A-Za-z0-9_$#]
+_WB  = r'(?<![A-Za-z0-9_$#])'
+_WBA = r'(?![A-Za-z0-9_$#])'
+
+
+def _file_current_text(f):
+    """Return the 'new state' text of a file from its patch or full_content."""
+    if f.get("full_content"):
+        return f["full_content"]
+    patch = f.get("patch", "") or ""
+    lines = []
+    for ln in patch.splitlines():
+        if ln.startswith(("+++", "---", "@@")):
+            continue
+        if ln.startswith("-"):
+            continue              # old content — skip
+        lines.append(ln[1:] if ln.startswith("+") else ln)
+    return "\n".join(lines)
+
+
+def _topo_sort_files(files):
+    """
+    Sort PR files so dependencies come before dependants.
+
+    Algorithm:
+      1. For each SQL file detect which DB object it defines (via DDL regex).
+      2. For each file scan its new-state content for references to objects
+         defined by *other* files in this PR.
+      3. Topological sort (Kahn's) — within each wave, order by _dep_score.
+      4. Non-SQL files and any cycle remainder fall back to _dep_score.
+    """
+    import heapq
+
+    n = len(files)
+    if n <= 1:
+        return list(files)
+
+    is_sql = [
+        os.path.splitext(f.get("filename", ""))[1].lower() in _SQL_EXTS
+        for f in files
+    ]
+
+    # ── 1. detect defined object name (SQL files only) ─────────────────────
+    texts = [_file_current_text(f) for f in files]
+
+    obj_names = []   # None for non-SQL or undetectable
+    for i, f in enumerate(files):
+        if not is_sql[i]:
+            obj_names.append(None)
+            continue
+        m = _DDL_DEFINE.search(texts[i])
+        if m:
+            obj_names.append(m.group(1).lower())
+        else:
+            # fallback: filename stem (stripped of leading numbers)
+            base = os.path.splitext(os.path.basename(f.get("filename", "")))[0]
+            obj_names.append(re.sub(r'^\d+[_\-]+', '', base).lower() or None)
+
+    # obj → file index (only for SQL files with a name)
+    obj_to_idx = {name: i for i, name in enumerate(obj_names) if name}
+
+    # ── 2. build dependency edges (file i depends on file j) ───────────────
+    deps = [set() for _ in range(n)]   # deps[i] = set of j that i needs first
+    for i, text in enumerate(texts):
+        if not is_sql[i]:
+            continue
+        for obj, j in obj_to_idx.items():
+            if j == i:
+                continue
+            if re.search(_WB + re.escape(obj) + _WBA, text, re.IGNORECASE):
+                deps[i].add(j)
+
+    # ── 3. Kahn's topological sort with _dep_score tiebreaker ──────────────
+    in_deg = [len(deps[i]) for i in range(n)]
+    rdeps  = [[] for _ in range(n)]
+    for i in range(n):
+        for j in deps[i]:
+            rdeps[j].append(i)
+
+    heap = []
+    for i in range(n):
+        if in_deg[i] == 0:
+            heapq.heappush(heap, (_dep_score(files[i].get("filename", "")), i))
+
+    order = []
+    while heap:
+        _, i = heapq.heappop(heap)
+        order.append(i)
+        for j in rdeps[i]:
+            in_deg[j] -= 1
+            if in_deg[j] == 0:
+                heapq.heappush(heap, (_dep_score(files[j].get("filename", "")), j))
+
+    # ── 4. handle cycles — append remainder by _dep_score ──────────────────
+    if len(order) < n:
+        used = set(order)
+        rest = sorted(
+            [i for i in range(n) if i not in used],
+            key=lambda i: (_dep_score(files[i].get("filename", "")),
+                           files[i].get("filename", "")),
+        )
+        order.extend(rest)
+
+    return [files[i] for i in order]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -509,73 +636,201 @@ def _word_diff_block(doc, patch, status, adds, dels):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_word_doc(field_values, field_defs, pr_data, file_comments, output_dir):
-    doc = Document()
-    style = doc.styles["Normal"]
-    style.font.name = "Calibri"
-    style.font.size = Pt(11)
+    # ── Colour palette ────────────────────────────────────────────────────────
+    C_PRIMARY   = RGBColor(0x1F, 0x38, 0x64)   # Deep Navy
+    C_SECONDARY = RGBColor(0x2E, 0x75, 0xB6)   # Steel Blue
+    C_BODY      = RGBColor(0x40, 0x40, 0x40)   # Charcoal
+    C_MUTED     = RGBColor(0x7F, 0x7F, 0x7F)   # Mid Gray
+    C_WHITE     = RGBColor(0xFF, 0xFF, 0xFF)
+    HEX_PRIMARY = "1F3864"
+    HEX_LIGHT   = "EAF0F8"   # alternating row tint
+    HEX_WHITE   = "FFFFFF"
+    HEX_RULE    = "BDD7EE"   # subtle blue-gray border
 
-    # ── title ──
+    doc = Document()
+
+    # ── Page setup — 1 inch margins ───────────────────────────────────────────
+    section = doc.sections[0]
+    section.top_margin    = Inches(1)
+    section.bottom_margin = Inches(1)
+    section.left_margin   = Inches(1)
+    section.right_margin  = Inches(1)
+
+    # ── Normal style — Calibri 11pt charcoal, 1.15 line spacing ──────────────
+    normal = doc.styles["Normal"]
+    normal.font.name  = "Calibri"
+    normal.font.size  = Pt(11)
+    normal.font.color.rgb = C_BODY
+    normal.paragraph_format.space_after      = Pt(7)
+    normal.paragraph_format.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+    normal.paragraph_format.line_spacing      = 1.15
+
+    # ── XML helpers ───────────────────────────────────────────────────────────
+    def _shade_para(p, hex_fill):
+        pPr = p._p.get_or_add_pPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), hex_fill)
+        pPr.append(shd)
+
+    def _shade_cell(cell, hex_fill):
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd  = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear"); shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), hex_fill)
+        tcPr.append(shd)
+
+    def _bottom_border(p, color=HEX_RULE, sz="4"):
+        pPr  = p._p.get_or_add_pPr()
+        pBdr = OxmlElement("w:pBdr")
+        bot  = OxmlElement("w:bottom")
+        bot.set(qn("w:val"), "single"); bot.set(qn("w:sz"), sz)
+        bot.set(qn("w:space"), "1");    bot.set(qn("w:color"), color)
+        pBdr.append(bot); pPr.append(pBdr)
+
+    def _left_border(p, color, sz="18"):
+        pPr  = p._p.get_or_add_pPr()
+        pBdr = OxmlElement("w:pBdr")
+        lft  = OxmlElement("w:left")
+        lft.set(qn("w:val"), "single"); lft.set(qn("w:sz"), sz)
+        lft.set(qn("w:space"), "4");    lft.set(qn("w:color"), color)
+        pBdr.append(lft); pPr.append(pBdr)
+
+    def _fld_run(p, instr, color=C_MUTED):
+        fc1 = OxmlElement("w:fldChar"); fc1.set(qn("w:fldCharType"), "begin")
+        it  = OxmlElement("w:instrText"); it.text = instr
+        fc2 = OxmlElement("w:fldChar"); fc2.set(qn("w:fldCharType"), "end")
+        r   = p.add_run(); r.font.size = Pt(9); r.font.color.rgb = color
+        r._r.append(fc1); r._r.append(it); r._r.append(fc2)
+
+    # ── Header — document title, muted gray ──────────────────────────────────
     doc_title_val = (field_values.get("doc_title") or "").strip() or \
                     (pr_data.get("title") if pr_data else None) or "Issue Report"
-    title = doc.add_heading(doc_title_val, 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    hdr_p = section.header.paragraphs[0]
+    hdr_p.clear()
+    hdr_p.paragraph_format.space_after = Pt(0)
+    _bottom_border(hdr_p, color=HEX_RULE, sz="4")
+    rh = hdr_p.add_run(doc_title_val)
+    rh.font.name = "Calibri"; rh.font.size = Pt(9); rh.font.color.rgb = C_MUTED
+
+    # ── Footer — page N of M, centered ───────────────────────────────────────
+    ftr_p = section.footer.paragraphs[0]
+    ftr_p.clear()
+    ftr_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    ftr_p.paragraph_format.space_before = Pt(0)
+    rpg = ftr_p.add_run("Page "); rpg.font.size = Pt(9); rpg.font.color.rgb = C_MUTED
+    _fld_run(ftr_p, " PAGE ")
+    rof = ftr_p.add_run(" of "); rof.font.size = Pt(9); rof.font.color.rgb = C_MUTED
+    _fld_run(ftr_p, " NUMPAGES ")
+
+    # ── Section heading helpers ───────────────────────────────────────────────
+    def _h1(text):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(16); p.paragraph_format.space_after = Pt(6)
+        r = p.add_run(text)
+        r.font.name = "Calibri"; r.font.size = Pt(16); r.bold = True
+        r.font.color.rgb = C_PRIMARY
+        _bottom_border(p, color=HEX_RULE, sz="4")
+        return p
+
+    def _h2(text):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(10); p.paragraph_format.space_after = Pt(4)
+        r = p.add_run(text)
+        r.font.name = "Calibri"; r.font.size = Pt(13); r.bold = True
+        r.font.color.rgb = C_SECONDARY
+        return p
+
+    # ── Table styling — navy header + zebra rows ──────────────────────────────
+    def _build_table(rows_data, col_headers=None):
+        start = 0
+        if col_headers:
+            tbl = doc.add_table(rows=1, cols=len(col_headers))
+            tbl.style = "Table Grid"
+            for ci, hdr_txt in enumerate(col_headers):
+                cell = tbl.rows[0].cells[ci]
+                cell.text = hdr_txt
+                _shade_cell(cell, HEX_PRIMARY)
+                for p in cell.paragraphs:
+                    if p.runs:
+                        p.runs[0].font.color.rgb = C_WHITE
+                        p.runs[0].bold = True
+                        p.runs[0].font.size = Pt(10)
+        else:
+            tbl = doc.add_table(rows=0, cols=2)
+            tbl.style = "Table Grid"
+        for ri, (label, value) in enumerate(rows_data):
+            row = tbl.add_row()
+            row.cells[0].text = label
+            row.cells[1].text = str(value) if value else "N/A"
+            bg = HEX_LIGHT if ri % 2 == 0 else HEX_WHITE
+            for cell in row.cells:
+                _shade_cell(cell, bg)
+            for p in row.cells[0].paragraphs:
+                if p.runs:
+                    p.runs[0].bold = True
+                    p.runs[0].font.color.rgb = C_PRIMARY
+                    p.runs[0].font.size = Pt(10)
+            for p in row.cells[1].paragraphs:
+                if p.runs:
+                    p.runs[0].font.color.rgb = C_BODY
+                    p.runs[0].font.size = Pt(10)
+        return tbl
+
+    # ── Title block ───────────────────────────────────────────────────────────
+    title_p = doc.add_paragraph()
+    title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_p.paragraph_format.space_before = Pt(0)
+    title_p.paragraph_format.space_after  = Pt(4)
+    rt = title_p.add_run(doc_title_val)
+    rt.font.name = "Calibri"; rt.font.size = Pt(26); rt.bold = True
+    rt.font.color.rgb = C_PRIMARY
 
     sub = doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}")
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    sub.runs[0].font.color.rgb = RGBColor(0x8b, 0x94, 0x9e)
-    doc.add_paragraph("")
+    sub.paragraph_format.space_before = Pt(0); sub.paragraph_format.space_after = Pt(12)
+    if sub.runs:
+        sub.runs[0].font.size = Pt(10); sub.runs[0].italic = True
+        sub.runs[0].font.color.rgb = C_MUTED
 
-    # ── dynamic fields table ──
-    tbl = doc.add_table(rows=0, cols=2)
-    tbl.style = "Light List Accent 1"
+    rule_p = doc.add_paragraph()
+    rule_p.paragraph_format.space_before = Pt(0); rule_p.paragraph_format.space_after = Pt(16)
+    _bottom_border(rule_p, color=HEX_PRIMARY, sz="12")
 
-    def add_row(label, value, bold_label=True):
-        row = tbl.add_row()
-        row.cells[0].text = label
-        row.cells[1].text = str(value) if value else "N/A"
-        if bold_label and row.cells[0].paragraphs[0].runs:
-            row.cells[0].paragraphs[0].runs[0].bold = True
-
+    # ── Issue Details ─────────────────────────────────────────────────────────
+    _h1("Issue Details")
     enabled = [fd for fd in field_defs if fd.get("enabled", True)]
-    for fd in enabled:
-        val = field_values.get(fd["key"], fd.get("default", ""))
-        add_row(fd["label"], val)
+    if enabled:
+        rows = [(fd["label"], field_values.get(fd["key"], fd.get("default", "")))
+                for fd in enabled]
+        _build_table(rows, col_headers=["Field", "Value"])
 
-    # ── description ──
-    doc.add_paragraph("")
-    doc.add_heading("Description", level=1)
-    doc.add_paragraph(field_values.get("description") or "No description provided.")
+    # ── Description ──────────────────────────────────────────────────────────
+    _h1("Description")
+    desc_p = doc.add_paragraph(field_values.get("description") or "No description provided.")
+    desc_p.paragraph_format.left_indent  = Cm(0.3)
+    desc_p.paragraph_format.right_indent = Cm(0.3)
 
-    # ── PR details ──
+    # ── GitHub PR Details ─────────────────────────────────────────────────────
     if pr_data:
-        doc.add_paragraph("")
-        doc.add_heading("GitHub PR Details", level=1)
-        pt = doc.add_table(rows=0, cols=2)
-        pt.style = "Light List Accent 1"
-
-        def pr_add(label, value):
-            row = pt.add_row()
-            row.cells[0].text = label
-            row.cells[1].text = str(value) if value else "N/A"
-            if row.cells[0].paragraphs[0].runs:
-                row.cells[0].paragraphs[0].runs[0].bold = True
-
-        pr_add("PR Title", pr_data.get("title"))
-        pr_add("PR State", pr_data.get("state", "").upper())
-        pr_add("Author",   pr_data.get("user", {}).get("login"))
-        pr_add("Created",  (pr_data.get("created_at") or "")[:10])
-        pr_add("Updated",  (pr_data.get("updated_at") or "")[:10])
-        pr_add("Branch",   pr_data.get("head", {}).get("ref"))
-        pr_add("Base",     pr_data.get("base", {}).get("ref"))
+        _h1("GitHub PR Details")
+        pr_rows = [
+            ("PR Title", pr_data.get("title")),
+            ("PR State", (pr_data.get("state") or "").upper()),
+            ("Author",   pr_data.get("user", {}).get("login")),
+            ("Created",  (pr_data.get("created_at") or "")[:10]),
+            ("Updated",  (pr_data.get("updated_at") or "")[:10]),
+            ("Branch",   pr_data.get("head", {}).get("ref")),
+            ("Base",     pr_data.get("base", {}).get("ref")),
+        ]
+        _build_table(pr_rows, col_headers=["Field", "Value"])
         if pr_data.get("body"):
-            doc.add_paragraph("")
-            doc.add_heading("PR Body", level=2)
+            _h2("PR Body")
             doc.add_paragraph(pr_data["body"])
 
-    # ── file changes ──
+    # ── Code Changes ──────────────────────────────────────────────────────────
     if file_comments:
-        doc.add_paragraph("")
-        doc.add_heading("Code Changes", level=1)
+        _h1("Code Changes")
         for idx, fc in enumerate(file_comments, 1):
             fname   = fc.get("filename", "unknown")
             status  = fc.get("status", "modified")
@@ -585,111 +840,85 @@ def generate_word_doc(field_values, field_defs, pr_data, file_comments, output_d
             dels    = fc.get("deletions", 0)
             patch   = fc.get("patch", "")
 
-            doc.add_paragraph("")
-
-            # ── file header ──────────────────────────────────────────────────
+            # File header
             fh = doc.add_paragraph()
-            fh.paragraph_format.space_before = Pt(4)
-            fh.paragraph_format.space_after  = Pt(2)
+            fh.paragraph_format.space_before = Pt(10); fh.paragraph_format.space_after = Pt(2)
             r1 = fh.add_run(f"Step {idx}  ")
-            r1.bold = True; r1.font.size = Pt(11)
-            r1.font.color.rgb = RGBColor(0x00, 0x5c, 0xb8)   # dark blue
+            r1.bold = True; r1.font.size = Pt(12); r1.font.color.rgb = C_PRIMARY
             badge_lbl = STATUS_EMOJI.get(status, "~")
             r2 = fh.add_run(f"[{badge_lbl} {status.upper()}]  ")
             r2.bold = True; r2.font.size = Pt(10)
             if status == "added":
-                r2.font.color.rgb = RGBColor(0x1a, 0x7f, 0x37)   # dark green
+                r2.font.color.rgb = RGBColor(0x1a, 0x7f, 0x37)
             elif status in ("removed", "deleted"):
-                r2.font.color.rgb = RGBColor(0xcf, 0x22, 0x2e)   # dark red
+                r2.font.color.rgb = RGBColor(0xcf, 0x22, 0x2e)
             else:
-                r2.font.color.rgb = RGBColor(0x7c, 0x4a, 0x00)   # dark amber
+                r2.font.color.rgb = RGBColor(0x7c, 0x4a, 0x00)
             r3 = fh.add_run(fname)
-            r3.bold = True; r3.font.size = Pt(10)
-            r3.font.name = "Consolas"
-            r3.font.color.rgb = RGBColor(0x1f, 0x2d, 0x3d)       # dark navy
+            r3.bold = True; r3.font.size = Pt(10); r3.font.name = "Consolas"
+            r3.font.color.rgb = C_BODY
 
             if adds or dels:
                 sp = doc.add_paragraph()
-                sp.paragraph_format.left_indent = Cm(0.5)
-                sp.paragraph_format.space_before = Pt(0)
-                sp.paragraph_format.space_after  = Pt(4)
+                sp.paragraph_format.left_indent  = Cm(0.5)
+                sp.paragraph_format.space_before = Pt(0); sp.paragraph_format.space_after = Pt(4)
                 ra = sp.add_run(f"+{adds} additions  ")
                 ra.font.size = Pt(9); ra.font.color.rgb = RGBColor(0x1a, 0x7f, 0x37)
                 rd = sp.add_run(f"−{dels} deletions")
                 rd.font.size = Pt(9); rd.font.color.rgb = RGBColor(0xcf, 0x22, 0x2e)
 
-            # ── change description ────────────────────────────────────────────
+            # Callout box — change description with steel-blue left border
             if comment:
                 ch = doc.add_paragraph()
-                ch.paragraph_format.left_indent   = Cm(0.5)
-                ch.paragraph_format.right_indent  = Cm(0.5)
-                ch.paragraph_format.space_before  = Pt(6)
-                ch.paragraph_format.space_after   = Pt(6)
-                # light yellow shading so it stands out on the page
-                pPr = ch._p.get_or_add_pPr()
-                shd = OxmlElement("w:shd")
-                shd.set(qn("w:val"),   "clear")
-                shd.set(qn("w:color"), "auto")
-                shd.set(qn("w:fill"),  "FFF8DC")
-                pPr.append(shd)
+                ch.paragraph_format.left_indent  = Cm(0.5)
+                ch.paragraph_format.right_indent = Cm(0.5)
+                ch.paragraph_format.space_before = Pt(6); ch.paragraph_format.space_after = Pt(6)
+                _shade_para(ch, HEX_LIGHT)
+                _left_border(ch, color="2E75B6", sz="18")
                 rl = ch.add_run("Change Description:  ")
-                rl.bold = True; rl.font.size = Pt(10)
-                rl.font.color.rgb = RGBColor(0x7c, 0x4a, 0x00)   # dark amber label
+                rl.bold = True; rl.font.size = Pt(10); rl.font.color.rgb = C_SECONDARY
                 rc = ch.add_run(comment)
-                rc.font.size = Pt(11)
-                rc.bold = False
-                rc.font.color.rgb = RGBColor(0x1a, 0x1a, 0x1a)   # near-black — readable
+                rc.font.size = Pt(11); rc.font.color.rgb = C_BODY
 
-            # ── diff block label ──────────────────────────────────────────────
-            doc.add_paragraph("")
+            # Diff label
             dh = doc.add_paragraph()
-            dh.paragraph_format.left_indent = Cm(0.5)
-            dh.paragraph_format.space_before = Pt(0)
-            dh.paragraph_format.space_after  = Pt(2)
-            rh = dh.add_run("Diff:")
-            rh.bold = True; rh.font.size = Pt(9)
-            rh.font.color.rgb = RGBColor(0x57, 0x60, 0x6a)       # dark grey
+            dh.paragraph_format.left_indent  = Cm(0.5)
+            dh.paragraph_format.space_before = Pt(4); dh.paragraph_format.space_after = Pt(2)
+            rh = dh.add_run("Code Diff:")
+            rh.bold = True; rh.font.size = Pt(9); rh.font.color.rgb = C_MUTED
 
             _word_diff_block(doc, patch, status, adds, dels)
 
             for si, shot in enumerate(shots, 1):
                 if isinstance(shot, dict):
-                    sp_path     = shot.get("path", "")
-                    shot_cmt    = shot.get("comment", "")
+                    sp_path  = shot.get("path", "")
+                    shot_cmt = shot.get("comment", "")
                 else:
-                    sp_path  = str(shot)
-                    shot_cmt = ""
+                    sp_path  = str(shot); shot_cmt = ""
                 if not sp_path or not os.path.exists(sp_path):
                     continue
                 doc.add_paragraph("")
                 cap_lbl = shot_cmt or f"Screenshot {si}  —  {os.path.basename(sp_path)}"
                 cap = doc.add_paragraph(f"  {cap_lbl}")
                 if cap.runs:
-                    cap.runs[0].font.size = Pt(9)
-                    cap.runs[0].font.color.rgb = RGBColor(0x8b, 0x94, 0x9e)
+                    cap.runs[0].font.size = Pt(9); cap.runs[0].italic = True
+                    cap.runs[0].font.color.rgb = C_MUTED
                 try:
                     doc.add_picture(sp_path, width=Inches(5.5))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                except Exception as e:
-                    doc.add_paragraph(f"  [Cannot embed image: {e}]")
+                except Exception as ex:
+                    doc.add_paragraph(f"  [Cannot embed image: {ex}]")
 
-            # divider rule
+            # Divider rule
             div = doc.add_paragraph("")
-            pPr = div._p.get_or_add_pPr()
-            pBdr = OxmlElement("w:pBdr")
-            bot  = OxmlElement("w:bottom")
-            bot.set(qn("w:val"), "single")
-            bot.set(qn("w:sz"), "4")
-            bot.set(qn("w:space"), "1")
-            bot.set(qn("w:color"), "BFBFBF")
-            pBdr.append(bot)
-            pPr.append(pBdr)
+            div.paragraph_format.space_before = Pt(10); div.paragraph_format.space_after = Pt(2)
+            _bottom_border(div, color=HEX_RULE, sz="4")
 
     doc_name = field_values.get("doc_name") or \
                f"Issue_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     if not doc_name.endswith(".docx"):
         doc_name += ".docx"
-    pr_num = str(pr_data.get("number", "")) if pr_data else ""
+    pr_num   = str(pr_data.get("number", "")) if pr_data else ""
     save_dir = os.path.join(output_dir, f"PR_{pr_num}") if pr_num else output_dir
     os.makedirs(save_dir, exist_ok=True)
     out = os.path.join(save_dir, doc_name)
@@ -704,96 +933,132 @@ def build_preview_html(field_values, field_defs, pr_data, file_comments):
     """Return an HTML string that visually matches the Word doc layout."""
     e = html.escape
 
-    def trow(label, value):
-        return (f'<tr><td style="font-weight:700;padding:4px 12px 4px 4px;'
-                f'color:#e6edf3;white-space:nowrap">{e(label)}</td>'
-                f'<td style="padding:4px;color:#adbac7">{e(str(value) if value else "N/A")}'
-                f'</td></tr>')
+    def trow(label, value, odd=True):
+        bg = "#EAF0F8" if odd else "#FFFFFF"
+        return (f'<tr style="background:{bg}">'
+                f'<td style="font-weight:700;padding:6px 12px 6px 8px;'
+                f'color:#1F3864;white-space:nowrap;border:1px solid #BDD7EE">{e(label)}</td>'
+                f'<td style="padding:6px 8px;color:#404040;border:1px solid #BDD7EE">'
+                f'{e(str(value) if value else "N/A")}</td></tr>')
+
+    def theader(cols):
+        cells = "".join(
+            f'<th style="background:#1F3864;color:#fff;font-weight:700;'
+            f'padding:6px 10px;text-align:left;font-size:11px;'
+            f'letter-spacing:.04em;border:1px solid #1F3864">{e(c)}</th>'
+            for c in cols)
+        return f'<thead><tr>{cells}</tr></thead>'
 
     css = """
-    body{background:#0d1117;color:#e6edf3;font-family:Calibri,Segoe UI,sans-serif;
-         font-size:14px;margin:0;padding:24px}
-    h1{color:#58a6ff;font-size:20px;border-bottom:1px solid #30363d;padding-bottom:6px}
-    h2{color:#8b949e;font-size:15px;margin-top:18px}
-    h0{color:#e6edf3;font-size:24px;text-align:center;display:block;margin-bottom:4px}
-    .sub{text-align:center;color:#8b949e;font-size:12px;margin-bottom:20px}
-    table{border-collapse:collapse;width:100%;max-width:700px;margin-bottom:16px}
-    td{vertical-align:top}
-    .section{background:#1c2128;border:1px solid #30363d;border-radius:6px;
-             padding:16px;margin-bottom:18px}
-    .file-card{border-left:3px solid #58a6ff;margin:12px 0;padding:10px 14px;
-               background:#161b22;border-radius:0 6px 6px 0}
-    .file-added{border-left-color:#3fb950}
-    .file-modified{border-left-color:#58a6ff}
-    .file-removed{border-left-color:#f85149}
-    .file-renamed{border-left-color:#bc8cff}
-    .badge{display:inline-block;padding:2px 8px;border-radius:4px;
-           font-size:11px;font-weight:700;margin-right:8px}
-    .badge-A{background:#1f6931;color:#fff}
-    .badge-M{background:#1c4a6e;color:#fff}
-    .badge-D{background:#8a1f1f;color:#fff}
-    .badge-R{background:#5a2d82;color:#fff}
-    .badge-C{background:#1c4a6e;color:#fff}
-    .fname{font-family:Consolas,monospace;font-size:13px;font-weight:700}
-    .stats{font-size:11px;color:#8b949e;margin-top:4px}
-    .adds{color:#3fb950} .dels{color:#f85149}
-    .comment-box{background:#0d1117;border-left:3px solid #d29922;
-                 border-radius:0 4px 4px 0;padding:8px 12px;
-                 margin-top:10px;font-size:13px;color:#e6edf3}
-    .comment-label{font-size:11px;color:#d29922;font-weight:700;
+    *{box-sizing:border-box}
+    body{background:#F4F6FA;color:#404040;
+         font-family:Calibri,"Segoe UI",Arial,sans-serif;
+         font-size:13px;line-height:1.5;margin:0;padding:28px 36px;max-width:920px}
+    h1{color:#1F3864;font-size:17px;font-weight:700;
+       border-bottom:2px solid #BDD7EE;padding-bottom:7px;
+       margin:20px 0 10px 0}
+    h2{color:#2E75B6;font-size:14px;font-weight:700;margin:14px 0 6px 0}
+    .doc-title{color:#1F3864;font-size:26px;font-weight:700;text-align:center;
+               display:block;margin-bottom:4px;line-height:1.2;font-family:Calibri,"Segoe UI",sans-serif}
+    .sub{text-align:center;color:#7F7F7F;font-size:11px;
+         margin-bottom:8px;font-style:italic}
+    .title-rule{border:none;border-top:3px solid #1F3864;margin:10px 0 22px 0}
+    table{border-collapse:collapse;width:100%;max-width:720px;margin-bottom:16px}
+    td,th{vertical-align:top}
+    .section{background:#FFFFFF;border:1px solid #BDD7EE;border-radius:6px;
+             padding:18px 22px;margin-bottom:20px;
+             box-shadow:0 1px 3px rgba(31,56,100,.06)}
+    .file-card{border-left:4px solid #2E75B6;margin:14px 0;padding:12px 16px;
+               background:#FAFBFC;border-radius:0 6px 6px 0;
+               border:1px solid #D9E4F0;border-left-width:4px}
+    .file-added{border-left-color:#1a7f37}
+    .file-modified{border-left-color:#2E75B6}
+    .file-removed{border-left-color:#cf222e}
+    .file-renamed{border-left-color:#7c4a00}
+    .step-label{font-weight:700;font-size:14px;color:#1F3864}
+    .badge{display:inline-block;padding:2px 9px;border-radius:3px;
+           font-size:10px;font-weight:700;margin-right:8px;letter-spacing:.03em}
+    .badge-A{background:#1a7f37;color:#fff}
+    .badge-M{background:#1F3864;color:#fff}
+    .badge-D{background:#cf222e;color:#fff}
+    .badge-R{background:#7c4a00;color:#fff}
+    .badge-C{background:#2E75B6;color:#fff}
+    .fname{font-family:Consolas,monospace;font-size:12px;font-weight:700;color:#404040}
+    .stats{font-size:11px;color:#7F7F7F;margin-top:5px}
+    .adds{color:#1a7f37;font-weight:700} .dels{color:#cf222e;font-weight:700}
+    .comment-box{background:#EAF0F8;border-left:4px solid #2E75B6;
+                 border-radius:0 4px 4px 0;padding:10px 14px;
+                 margin-top:10px;font-size:12px;color:#404040}
+    .comment-label{font-size:10px;color:#2E75B6;font-weight:700;
                    margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em}
+    .jira-box{background:#F0F4FB;border-left:4px solid #1F3864}
+    .jira-label{color:#1F3864}
     .screenshot-wrap{margin-top:12px;text-align:center}
-    .screenshot-cap{font-size:11px;color:#8b949e;margin-bottom:6px}
-    img{max-width:100%;border-radius:4px;border:1px solid #30363d}
-    .divider{border:none;border-top:1px solid #30363d;margin:16px 0}
-    .pr-body{white-space:pre-wrap;font-size:12px;color:#adbac7;
-             background:#161b22;padding:10px;border-radius:4px}
-    .diff-block{margin-top:10px;background:#0a0e14;border-radius:4px;
-                border:1px solid #30363d}
-    .diff-block summary{padding:6px 10px;cursor:pointer;color:#8b949e;
+    .screenshot-cap{font-size:10px;color:#7F7F7F;margin-bottom:6px;font-style:italic}
+    img{max-width:100%;border-radius:4px;border:1px solid #BDD7EE}
+    .divider{border:none;border-top:1px solid #BDD7EE;margin:18px 0}
+    .pr-body{white-space:pre-wrap;font-size:11px;color:#404040;
+             background:#F9FAFB;padding:10px 14px;border-radius:4px;
+             border:1px solid #BDD7EE;line-height:1.5}
+    .diff-block{margin-top:10px;background:#F9FAFB;border-radius:4px;
+                border:1px solid #BDD7EE}
+    .diff-block summary{padding:6px 10px;cursor:pointer;color:#7F7F7F;
                         font-size:11px;user-select:none}
     .diff-content{font-family:Consolas,monospace;font-size:11px;
                   padding:8px;overflow-x:auto;max-height:320px;overflow-y:auto}
-    .diff-add{background:#0e2318;color:#3fb950;white-space:pre}
-    .diff-del{background:#200e0e;color:#f85149;white-space:pre}
-    .diff-hunk{background:#0c1c2c;color:#58a6ff;white-space:pre}
-    .diff-ctx{color:#6e7681;white-space:pre}
+    .diff-add{background:#E6FFED;color:#1a7f37;white-space:pre}
+    .diff-del{background:#FFEBE9;color:#cf222e;white-space:pre}
+    .diff-hunk{background:#DDF4FF;color:#0969da;white-space:pre}
+    .diff-ctx{color:#57606a;white-space:pre}
+    .new-file-banner{background:#E6FFED;border-radius:4px;padding:6px 12px;
+                     margin-top:8px;font-family:Consolas,monospace;
+                     font-size:12px;color:#1a7f37;font-weight:700}
     """
 
+    doc_title_val = (field_values.get("doc_title") or "").strip() or \
+                    (pr_data.get("title") if pr_data else None) or "Issue Report"
+
     body = [f"<style>{css}</style>"]
+    body.append(f'<div class="doc-title">{e(doc_title_val)}</div>')
     body.append(f'<p class="sub">Generated: {datetime.now().strftime("%Y-%m-%d  %H:%M:%S")}</p>')
+    body.append('<hr class="title-rule">')
 
-    # dynamic fields
+    # Issue Details
     body.append('<div class="section"><h1>Issue Details</h1>')
-    body.append('<table>')
+    body.append(f'<table>{theader(["Field","Value"])}<tbody>')
     enabled = [fd for fd in field_defs if fd.get("enabled", True)]
-    for fd in enabled:
+    for ri, fd in enumerate(enabled):
         val = field_values.get(fd["key"], fd.get("default", ""))
-        body.append(trow(fd["label"], val))
-    body.append('</table></div>')
+        body.append(trow(fd["label"], val, odd=ri % 2 == 0))
+    body.append('</tbody></table></div>')
 
-    # description
+    # Description
     desc = field_values.get("description") or "No description provided."
     body.append(f'<div class="section"><h1>Description</h1>'
-                f'<p style="white-space:pre-wrap">{e(desc)}</p></div>')
+                f'<p style="white-space:pre-wrap;margin:0">{e(desc)}</p></div>')
 
-    # PR details
+    # PR Details
     if pr_data:
-        body.append('<div class="section"><h1>GitHub PR Details</h1><table>')
-        body.append(trow("PR Title", pr_data.get("title")))
-        body.append(trow("PR State", (pr_data.get("state") or "").upper()))
-        body.append(trow("Author",   pr_data.get("user", {}).get("login")))
-        body.append(trow("Created",  (pr_data.get("created_at") or "")[:10]))
-        body.append(trow("Updated",  (pr_data.get("updated_at") or "")[:10]))
-        body.append(trow("Branch",   pr_data.get("head", {}).get("ref")))
-        body.append(trow("Base",     pr_data.get("base", {}).get("ref")))
-        body.append('</table>')
+        pr_fields = [
+            ("PR Title", pr_data.get("title")),
+            ("PR State", (pr_data.get("state") or "").upper()),
+            ("Author",   pr_data.get("user", {}).get("login")),
+            ("Created",  (pr_data.get("created_at") or "")[:10]),
+            ("Updated",  (pr_data.get("updated_at") or "")[:10]),
+            ("Branch",   pr_data.get("head", {}).get("ref")),
+            ("Base",     pr_data.get("base", {}).get("ref")),
+        ]
+        body.append('<div class="section"><h1>GitHub PR Details</h1>')
+        body.append(f'<table>{theader(["Field","Value"])}<tbody>')
+        for ri, (label, value) in enumerate(pr_fields):
+            body.append(trow(label, value, odd=ri % 2 == 0))
+        body.append('</tbody></table>')
         if pr_data.get("body"):
             body.append(f'<h2>PR Body</h2>'
                         f'<div class="pr-body">{e(pr_data["body"])}</div>')
         body.append('</div>')
 
-    # file changes
+    # Code Changes
     if file_comments:
         body.append('<div class="section"><h1>Code Changes</h1>')
         for idx, fc in enumerate(file_comments, 1):
@@ -808,17 +1073,15 @@ def build_preview_html(field_values, field_defs, pr_data, file_comments):
             badge        = STATUS_EMOJI.get(status, "~")
 
             body.append(f'<div class="file-card file-{status}">')
-            body.append(f'<span class="badge badge-{badge}">{badge} {status.upper()}</span>'
+            body.append(f'<span class="step-label">Step {idx}</span>&nbsp;&nbsp;'
+                        f'<span class="badge badge-{badge}">{badge} {status.upper()}</span>'
                         f'<span class="fname">{e(fname)}</span>')
             body.append(f'<div class="stats">'
                         f'<span class="adds">+{adds}</span>&nbsp;&nbsp;'
-                        f'<span class="dels">-{dels}</span></div>')
+                        f'<span class="dels">−{dels}</span></div>')
 
-            # NEW FILE banner
             if status == "added":
-                body.append(f'<div style="background:#0e2318;border-radius:4px;'
-                            f'padding:6px 12px;margin-top:8px;font-family:Consolas,monospace;'
-                            f'font-size:12px;color:#3fb950;font-weight:700">'
+                body.append(f'<div class="new-file-banner">'
                             f'+ NEW FILE &nbsp;—&nbsp; {adds} line{"s" if adds != 1 else ""} added'
                             f'</div>')
 
@@ -827,40 +1090,39 @@ def build_preview_html(field_values, field_defs, pr_data, file_comments):
                             f'<div class="comment-label">Change Description</div>'
                             f'{e(word_comment)}</div>')
             if jira_comment and jira_comment != word_comment:
-                body.append(f'<div class="comment-box" style="border-left-color:#58a6ff">'
-                            f'<div class="comment-label" style="color:#58a6ff">Jira Comment</div>'
+                body.append(f'<div class="comment-box jira-box">'
+                            f'<div class="comment-label jira-label">Jira Comment</div>'
                             f'{e(jira_comment)}</div>')
 
-            # GitHub-style diff block
             if patch and status != "added":
                 patch_lines = patch.splitlines()
                 shown = patch_lines[:120]
                 diff_rows = []
                 for dl in shown:
                     if dl.startswith('+') and not dl.startswith('+++'):
-                        cls, sym = "diff-add", "+"
                         diff_rows.append(
-                            f'<div class="{cls}"><span style="opacity:.6;margin-right:6px">{sym}</span>{e(dl[1:])}</div>')
+                            f'<div class="diff-add">'
+                            f'<span style="opacity:.5;margin-right:6px">+</span>{e(dl[1:])}</div>')
                     elif dl.startswith('-') and not dl.startswith('---'):
-                        cls, sym = "diff-del", "−"
                         diff_rows.append(
-                            f'<div class="{cls}"><span style="opacity:.6;margin-right:6px">{sym}</span>{e(dl[1:])}</div>')
+                            f'<div class="diff-del">'
+                            f'<span style="opacity:.5;margin-right:6px">−</span>{e(dl[1:])}</div>')
                     elif dl.startswith('@'):
-                        diff_rows.append(
-                            f'<div class="diff-hunk">{e(dl)}</div>')
+                        diff_rows.append(f'<div class="diff-hunk">{e(dl)}</div>')
                     else:
                         diff_rows.append(
-                            f'<div class="diff-ctx"><span style="opacity:.4;margin-right:6px">&nbsp;</span>{e(dl[1:] if dl and dl[0]==" " else dl)}</div>')
+                            f'<div class="diff-ctx">'
+                            f'<span style="opacity:.3;margin-right:6px">&nbsp;</span>'
+                            f'{e(dl[1:] if dl and dl[0]==" " else dl)}</div>')
                 if len(patch_lines) > 120:
                     diff_rows.append(
-                        f'<div class="diff-ctx" style="color:#d29922">'
+                        f'<div class="diff-ctx" style="color:#7c4a00">'
                         f'⋯  {len(patch_lines)-120} more lines not shown</div>')
                 body.append(
                     f'<details class="diff-block" open>'
-                    f'<summary>Code Changes &nbsp;'
-                    f'<span style="color:#3fb950">+{adds}</span>'
-                    f'&nbsp;<span style="color:#f85149">−{dels}</span>'
-                    f'</summary>'
+                    f'<summary>Code Diff &nbsp;'
+                    f'<span class="adds">+{adds}</span>&nbsp;'
+                    f'<span class="dels">−{dels}</span></summary>'
                     f'<div class="diff-content">{"".join(diff_rows)}</div>'
                     f'</details>')
 
@@ -869,13 +1131,12 @@ def build_preview_html(field_values, field_defs, pr_data, file_comments):
                     sp_path  = shot.get("path", "")
                     shot_cmt = shot.get("comment", "")
                 else:
-                    sp_path  = str(shot)
-                    shot_cmt = ""
+                    sp_path  = str(shot); shot_cmt = ""
                 if not sp_path or not os.path.exists(sp_path):
                     continue
                 import base64 as b64
                 try:
-                    ext = os.path.splitext(sp_path)[1].lower().lstrip(".")
+                    ext  = os.path.splitext(sp_path)[1].lower().lstrip(".")
                     mime = {"jpg":"jpeg","jpeg":"jpeg","png":"png",
                             "gif":"gif","webp":"webp","bmp":"bmp"}.get(ext, "png")
                     with open(sp_path, "rb") as fh:
@@ -883,8 +1144,7 @@ def build_preview_html(field_values, field_defs, pr_data, file_comments):
                     cap_html = (f'<div class="screenshot-cap">{e(shot_cmt)}</div>'
                                 if shot_cmt else
                                 f'<div class="screenshot-cap">'
-                                f'Screenshot {si} — {e(os.path.basename(sp_path))}'
-                                f'</div>')
+                                f'Screenshot {si} — {e(os.path.basename(sp_path))}</div>')
                     body.append(f'<div class="screenshot-wrap">'
                                 f'{cap_html}'
                                 f'<img src="data:image/{mime};base64,{data}" />'
@@ -1013,9 +1273,7 @@ class DocPreviewWindow(tk.Toplevel):
         def _mw(e): canvas.yview_scroll(int(-1*(e.delta/120)), "units")
         canvas.bind("<MouseWheel>", _mw)
 
-        sorted_files = sorted(self._pr_files,
-                              key=lambda f: (_dep_score(f.get("filename", "")),
-                                             f.get("filename", "")))
+        sorted_files = _topo_sort_files(self._pr_files)
 
         for idx, f in enumerate(sorted_files, 1):
             fname  = f.get("filename", "")
@@ -1830,10 +2088,7 @@ class FileChangesPopup(tk.Toplevel):
         self.configure(bg=C["bg"])
         self.grab_set()
         self.transient(parent)
-        # sort by dependency score: no-dep files first
-        self._files  = sorted(files,
-                              key=lambda f: (_dep_score(f.get("filename", "")),
-                                             f.get("filename", "")))
+        self._files  = _topo_sort_files(files)
         self._rows   = []
         self._result = None
         self._build()
@@ -2178,9 +2433,7 @@ class SqlFilePopup(tk.Toplevel):
         self.grab_set()
         self.transient(parent)
 
-        self._files   = sorted(files,
-                               key=lambda f: (_dep_score(f.get("filename", "")),
-                                              f.get("filename", "")))
+        self._files   = _topo_sort_files(files)
         self._pr      = pr_data
         self._cfg     = config_data
         self._rows    = []
@@ -2454,9 +2707,10 @@ class SqlFilePopup(tk.Toplevel):
         hdrs  = self._gh_headers(token)
 
         # 1. raw_url (raw.githubusercontent.com)
+        verify = _ssl_verify(self._cfg)
         if raw_url:
             try:
-                r = requests.get(raw_url, headers=hdrs, timeout=15)
+                r = requests.get(raw_url, headers=hdrs, timeout=15, verify=verify)
                 if r.ok:
                     return r.text, None
                 raw_err = f"raw_url HTTP {r.status_code}"
@@ -2470,7 +2724,7 @@ class SqlFilePopup(tk.Toplevel):
             try:
                 # Strip query params if any, then add ref from raw_url SHA if possible
                 api_url = contents_url.split("?")[0]
-                r2 = requests.get(api_url, headers=hdrs, timeout=15)
+                r2 = requests.get(api_url, headers=hdrs, timeout=15, verify=verify)
                 if r2.ok:
                     data = r2.json()
                     if isinstance(data, dict) and data.get("encoding") == "base64":
@@ -2931,6 +3185,13 @@ class App(tk.Tk):
         jira_btn.pack(fill="x", pady=(0, 2))
         Tooltip(jira_btn, "Create Jira ticket and attach Word doc + SQL file.")
         tk.Label(rp, text="Post to Jira + attach files", bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 7)).pack(anchor="w", padx=2, pady=(0, 6))
+
+        jira_prev_btn = ttk.Button(rp, text="◈  Jira Preview", style="Accent.TButton",
+                                   command=self._show_jira_preview)
+        jira_prev_btn.pack(fill="x", pady=(0, 2))
+        Tooltip(jira_prev_btn, "Preview the Jira ticket before creating — validate fields and content.")
+        tk.Label(rp, text="Validate before submitting", bg=C["surface"], fg=C["muted"],
                  font=("Segoe UI", 7)).pack(anchor="w", padx=2, pady=(0, 14))
 
         tk.Frame(rp, bg=C["border"], height=1).pack(fill="x", pady=(0, 12))
@@ -3425,6 +3686,315 @@ class App(tk.Tk):
         jira_btn.pack(fill="x")
         Tooltip(jira_btn, "Create a Jira ticket and attach Word doc + SQL file.")
 
+        tk.Frame(card, bg=C["border"], height=1).pack(fill="x", pady=(8, 6))
+
+        prev_jira_btn = ttk.Button(card, text="  Jira Preview  ", style="Accent.TButton",
+                                   command=self._show_jira_preview)
+        prev_jira_btn.pack(fill="x")
+        Tooltip(prev_jira_btn, "Preview the Jira ticket that will be created — validate before submitting.")
+
+    # ── Jira Preview window ───────────────────────────────────────────────────
+
+    def _show_jira_preview(self):
+        fv = self._collect_fields()
+
+        # ── Jira-style light palette ──────────────────────────────────────────
+        JC = {
+            "bg":        "#F4F5F7",
+            "surface":   "#FFFFFF",
+            "header":    "#0052CC",
+            "header_fg": "#FFFFFF",
+            "border":    "#DFE1E6",
+            "text":      "#172B4D",
+            "muted":     "#5E6C84",
+            "accent":    "#0052CC",
+            "loz_open":  ("#0052CC", "#DEEBFF"),   # fg, bg
+            "loz_done":  ("#006644", "#E3FCEF"),
+            "loz_prog":  ("#0747A6", "#EAE6FF"),
+            "bug":       "#FF5630",
+            "story":     "#36B37E",
+            "task":      "#0052CC",
+            "epic":      "#6554C0",
+            "section":   "#F4F5F7",
+            "section_border": "#DFE1E6",
+            "tag_bg":    "#EBECF0",
+        }
+
+        issue_type = fv.get("issue_type", "Bug")
+        type_map   = {"Bug":"Bug","Enhancement":"Story","Task":"Task",
+                      "Story":"Story","Epic":"Epic","Sub-task":"Sub-task","Incident":"Bug"}
+        jira_type  = type_map.get(issue_type, "Bug")
+        type_color = {"Bug": JC["bug"], "Story": JC["story"],
+                      "Task": JC["task"], "Epic": JC["epic"]}.get(jira_type, JC["task"])
+        type_icons = {"Bug": "⬤", "Story": "◆", "Task": "✔", "Epic": "⚡", "Sub-task": "↳"}
+        type_icon  = type_icons.get(jira_type, "●")
+
+        priority   = fv.get("priority", "Medium")
+        pri_colors = {"Highest": "#FF5630", "High": "#FF7452",
+                      "Medium":  "#FF991F", "Low":  "#2684FF", "Lowest": "#00B8D9"}
+        pri_color  = pri_colors.get(priority, "#FF991F")
+        pri_icons  = {"Highest": "▲▲", "High": "▲", "Medium": "●",
+                      "Low": "▼", "Lowest": "▼▼"}
+        pri_icon   = pri_icons.get(priority, "●")
+
+        proj_key   = fv.get("project") or self.config_data.get("jira_project_key", "PROJ")
+        summary    = fv.get("summary") or "(no summary)"
+        reporter   = fv.get("reporter") or "—"
+        description = fv.get("description") or "No description provided."
+
+        # non-jira detail fields
+        detail_rows = []
+        for fd in self.config_data["fields"]:
+            if not fd.get("enabled", True): continue
+            if fd.get("jira_field"):        continue
+            val = fv.get(fd["key"], "")
+            if val and fd["key"] not in ("doc_name", "doc_title"):
+                detail_rows.append((fd["label"], val))
+
+        file_rows = []
+        for fc in self.file_comments:
+            jc = (fc.get("jira_comment") or "").strip()
+            status_emoji = {"added":"A","modified":"M","removed":"D",
+                            "renamed":"R","copied":"C"}.get(fc.get("status",""), "~")
+            file_rows.append((fc.get("filename",""), fc.get("status",""), status_emoji, jc))
+
+        # ── Window ────────────────────────────────────────────────────────────
+        win = tk.Toplevel(self)
+        win.title("Jira Ticket Preview")
+        win.geometry("980x720")
+        win.configure(bg=JC["bg"])
+        win.grab_set()
+
+        # ── Jira top-bar ──────────────────────────────────────────────────────
+        topbar = tk.Frame(win, bg=JC["header"], height=48)
+        topbar.pack(fill="x")
+        topbar.pack_propagate(False)
+        inner_top = tk.Frame(topbar, bg=JC["header"])
+        inner_top.pack(side="left", padx=16, fill="y")
+        tk.Label(inner_top, text="◈  Jira", bg=JC["header"], fg="#FFFFFF",
+                 font=("Segoe UI", 12, "bold")).pack(side="left", pady=12)
+        tk.Label(inner_top, text=f"  /  {proj_key}  /  New Issue  (Preview)",
+                 bg=JC["header"], fg="#B8D4FF",
+                 font=("Segoe UI", 9)).pack(side="left", pady=12)
+        tk.Label(topbar,
+                 text="⚠  Not yet created  —  this is a preview only",
+                 bg="#FF991F", fg="#172B4D",
+                 font=("Segoe UI", 8, "bold"),
+                 padx=10).pack(side="right", fill="y")
+
+        # ── Scrollable body ───────────────────────────────────────────────────
+        body_frame = tk.Frame(win, bg=JC["bg"])
+        body_frame.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(body_frame, bg=JC["bg"], highlightthickness=0)
+        vsb    = ttk.Scrollbar(body_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        scroll_frame = tk.Frame(canvas, bg=JC["bg"])
+        wid = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(wid, width=e.width))
+        scroll_frame.bind("<Configure>",
+                          lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        # ── Issue header area ─────────────────────────────────────────────────
+        hdr_area = tk.Frame(scroll_frame, bg=JC["surface"],
+                            relief="flat", bd=0)
+        hdr_area.pack(fill="x", padx=0, pady=0)
+        tk.Frame(hdr_area, bg=JC["border"], height=1).pack(fill="x")
+
+        hdr_inner = tk.Frame(hdr_area, bg=JC["surface"])
+        hdr_inner.pack(fill="x", padx=32, pady=18)
+
+        # breadcrumb
+        bc = tk.Frame(hdr_inner, bg=JC["surface"])
+        bc.pack(anchor="w")
+        tk.Label(bc, text=f"{proj_key}  ›", bg=JC["surface"], fg=JC["accent"],
+                 font=("Segoe UI", 8), cursor="hand2").pack(side="left")
+        tk.Label(bc, text="  New Issue", bg=JC["surface"], fg=JC["muted"],
+                 font=("Segoe UI", 8)).pack(side="left")
+
+        # issue type badge + key
+        type_row = tk.Frame(hdr_inner, bg=JC["surface"])
+        type_row.pack(anchor="w", pady=(6, 0))
+        tk.Label(type_row, text=type_icon, bg=JC["surface"], fg=type_color,
+                 font=("Segoe UI", 11, "bold")).pack(side="left")
+        tk.Label(type_row, text=f"  {jira_type.upper()}",
+                 bg=JC["surface"], fg=JC["muted"],
+                 font=("Segoe UI", 9, "bold")).pack(side="left")
+        tk.Label(type_row, text=f"  ·  {proj_key}-???",
+                 bg=JC["surface"], fg=JC["muted"],
+                 font=("Segoe UI", 9)).pack(side="left")
+
+        # summary
+        sum_lbl = tk.Label(hdr_inner, text=summary,
+                           bg=JC["surface"], fg=JC["text"],
+                           font=("Segoe UI", 17, "bold"),
+                           wraplength=860, justify="left", anchor="w")
+        sum_lbl.pack(anchor="w", pady=(8, 0))
+
+        # status + priority row
+        sp_row = tk.Frame(hdr_inner, bg=JC["surface"])
+        sp_row.pack(anchor="w", pady=(10, 4))
+
+        # status lozenge
+        loz_bg = JC["loz_open"][1]; loz_fg = JC["loz_open"][0]
+        loz = tk.Label(sp_row, text="  OPEN  ",
+                       bg=loz_bg, fg=loz_fg,
+                       font=("Segoe UI", 8, "bold"),
+                       relief="flat", padx=4, pady=2)
+        loz.pack(side="left")
+
+        tk.Label(sp_row, text="  ", bg=JC["surface"]).pack(side="left")
+
+        # priority lozenge
+        tk.Label(sp_row, text=f"  {pri_icon}  {priority}  ",
+                 bg=JC["tag_bg"], fg=pri_color,
+                 font=("Segoe UI", 8, "bold"),
+                 relief="flat", padx=4, pady=2).pack(side="left")
+
+        tk.Frame(hdr_area, bg=JC["border"], height=1).pack(fill="x")
+
+        # ── Two-column body ───────────────────────────────────────────────────
+        cols = tk.Frame(scroll_frame, bg=JC["bg"])
+        cols.pack(fill="both", expand=True, padx=20, pady=16)
+
+        # ── LEFT column: description content ─────────────────────────────────
+        left = tk.Frame(cols, bg=JC["bg"])
+        left.pack(side="left", fill="both", expand=True, padx=(12, 16))
+
+        def _section(parent, title):
+            f = tk.Frame(parent, bg=JC["surface"],
+                         relief="flat", bd=1,
+                         highlightbackground=JC["border"],
+                         highlightthickness=1)
+            f.pack(fill="x", pady=(0, 12))
+            hf = tk.Frame(f, bg=JC["section"])
+            hf.pack(fill="x")
+            tk.Frame(hf, bg=JC["accent"], width=3).pack(side="left", fill="y")
+            tk.Label(hf, text=f"  {title}",
+                     bg=JC["section"], fg=JC["text"],
+                     font=("Segoe UI", 9, "bold"),
+                     pady=7).pack(side="left")
+            tk.Frame(f, bg=JC["border"], height=1).pack(fill="x")
+            body = tk.Frame(f, bg=JC["surface"])
+            body.pack(fill="x", padx=14, pady=10)
+            return body
+
+        # Issue Details
+        if detail_rows:
+            det_body = _section(left, "Issue Details")
+            for lbl, val in detail_rows:
+                row = tk.Frame(det_body, bg=JC["surface"])
+                row.pack(fill="x", pady=2)
+                tk.Label(row, text=f"•  {lbl}:",
+                         bg=JC["surface"], fg=JC["muted"],
+                         font=("Segoe UI", 9), width=18, anchor="w").pack(side="left")
+                tk.Label(row, text=val,
+                         bg=JC["surface"], fg=JC["text"],
+                         font=("Segoe UI", 9), anchor="w", wraplength=420,
+                         justify="left").pack(side="left", fill="x", expand=True)
+
+        # Description
+        desc_body = _section(left, "Description")
+        tk.Label(desc_body, text=description,
+                 bg=JC["surface"], fg=JC["text"],
+                 font=("Segoe UI", 9),
+                 wraplength=460, justify="left", anchor="nw").pack(anchor="w")
+
+        # Changed Files
+        if file_rows:
+            fc_body = _section(left, "Changed Files")
+            st_colors = {"added": "#1a7f37", "modified": "#0969da",
+                         "removed": "#cf222e", "renamed": "#8250df"}
+            for fname, status, emoji, jcmt in file_rows:
+                frow = tk.Frame(fc_body, bg="#F8F9FB",
+                                highlightbackground=JC["border"],
+                                highlightthickness=1)
+                frow.pack(fill="x", pady=2)
+                lborder = tk.Frame(frow, bg=st_colors.get(status, "#0969da"), width=3)
+                lborder.pack(side="left", fill="y")
+                finner = tk.Frame(frow, bg="#F8F9FB")
+                finner.pack(side="left", fill="x", expand=True, padx=8, pady=5)
+                tk.Label(finner,
+                         text=f"{emoji}  {fname}  [{status.upper()}]",
+                         bg="#F8F9FB", fg=JC["text"],
+                         font=("Consolas", 8)).pack(anchor="w")
+                if jcmt:
+                    tk.Label(finner, text=f"    ↳  {jcmt}",
+                             bg="#F8F9FB", fg=JC["muted"],
+                             font=("Segoe UI", 8),
+                             wraplength=420, justify="left").pack(anchor="w")
+
+        # ── RIGHT column: details sidebar ─────────────────────────────────────
+        right = tk.Frame(cols, bg=JC["surface"],
+                         highlightbackground=JC["border"],
+                         highlightthickness=1,
+                         width=260)
+        right.pack(side="right", fill="y", padx=(0, 12))
+        right.pack_propagate(False)
+
+        def _detail_row(parent, label, value, val_color=None):
+            f = tk.Frame(parent, bg=JC["surface"])
+            f.pack(fill="x", padx=14, pady=5)
+            tk.Frame(parent, bg=JC["border"], height=1).pack(fill="x", padx=14)
+            tk.Label(f, text=label,
+                     bg=JC["surface"], fg=JC["muted"],
+                     font=("Segoe UI", 8), anchor="w").pack(anchor="w")
+            tk.Label(f, text=value,
+                     bg=JC["surface"], fg=val_color or JC["text"],
+                     font=("Segoe UI", 9, "bold"), anchor="w",
+                     wraplength=220, justify="left").pack(anchor="w")
+
+        tk.Label(right, text="Details",
+                 bg=JC["section"], fg=JC["text"],
+                 font=("Segoe UI", 9, "bold"), pady=8,
+                 anchor="w", padx=14).pack(fill="x")
+        tk.Frame(right, bg=JC["border"], height=1).pack(fill="x")
+
+        _detail_row(right, "Project",    proj_key,         JC["accent"])
+        _detail_row(right, "Issue Type", jira_type,        type_color)
+        _detail_row(right, "Status",     "Open")
+        _detail_row(right, "Priority",   priority,         pri_color)
+        _detail_row(right, "Reporter",   reporter)
+
+        comp = fv.get("component", "")
+        if comp:
+            _detail_row(right, "Component", comp)
+        fxv = fv.get("fix_version", "")
+        if fxv:
+            _detail_row(right, "Fix Version", fxv)
+
+        git = fv.get("git_link", "")
+        if git:
+            tk.Frame(right, bg=JC["border"], height=1).pack(fill="x", padx=14)
+            f_git = tk.Frame(right, bg=JC["surface"])
+            f_git.pack(fill="x", padx=14, pady=5)
+            tk.Label(f_git, text="PR Link", bg=JC["surface"], fg=JC["muted"],
+                     font=("Segoe UI", 8), anchor="w").pack(anchor="w")
+            git_lbl = tk.Label(f_git, text=git, bg=JC["surface"], fg=JC["accent"],
+                               font=("Segoe UI", 8), anchor="w", cursor="hand2",
+                               wraplength=220, justify="left")
+            git_lbl.pack(anchor="w")
+            git_lbl.bind("<Button-1>", lambda e, u=git: webbrowser.open(u))
+
+        # ── Footer buttons ────────────────────────────────────────────────────
+        foot = tk.Frame(win, bg=JC["surface"])
+        foot.pack(fill="x", side="bottom")
+        tk.Frame(foot, bg=JC["border"], height=1).pack(fill="x")
+        btn_row = tk.Frame(foot, bg=JC["surface"])
+        btn_row.pack(fill="x", padx=24, pady=10)
+        ttk.Button(btn_row, text="✕  Close Preview",
+                   style="Ghost.TButton",
+                   command=win.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(btn_row, text="✦  Create Jira Ticket",
+                   style="Success.TButton",
+                   command=lambda: [win.destroy(),
+                                    self._create_jira_thread()]).pack(side="right")
+
     # ── Settings ─────────────────────────────────────────────────────────────
 
 
@@ -3468,12 +4038,14 @@ class App(tk.Tk):
 
         defs = [
             ("GitHub Token File",   "github_token_file",   "⎇"),
+            ("GitHub API URL",      "github_api_url",      "⎇"),
             ("Jira Token File",     "jira_token_file",     "⊡"),
             ("Jira Base URL",       "jira_base_url",       "≋"),
             ("Jira Project Key",    "jira_project_key",    "⊡"),
             ("Jira Email",          "jira_email",          "≋"),
             ("GitHub Owner",        "github_owner",        "⎇"),
             ("GitHub Repo",         "github_repo",         "⎇"),
+            ("SSL Certificate File","ssl_cert_file",       "⊡"),
             ("Output Directory",    "word_doc_output_dir", "⊞"),
         ]
         vars_ = {}
@@ -3488,15 +4060,21 @@ class App(tk.Tk):
             tk.Label(lbl_f, text=icon, bg=row_bg, fg=C["accent"],
                      font=("Segoe UI", 9), width=2).pack(side="left")
             tk.Label(lbl_f, text=label, bg=row_bg, fg=C["muted"],
-                     width=20, anchor="w", font=("Segoe UI", 9)).pack(side="left")
+                     width=22, anchor="w", font=("Segoe UI", 9)).pack(side="left")
             v2 = tk.StringVar(value=str(self.config_data.get(key, "")))
             vars_[key] = v2
             ttk.Entry(inner, textvariable=v2).pack(side="left", fill="x", expand=True)
             if "file" in key or "dir" in key.lower():
                 is_dir = "dir" in key.lower()
-                def _browse(var=v2, d=is_dir):
-                    p = filedialog.askdirectory() if d else \
-                        filedialog.askopenfilename(
+                is_pem = key == "ssl_cert_file"
+                def _browse(var=v2, d=is_dir, pem=is_pem):
+                    if d:
+                        p = filedialog.askdirectory()
+                    elif pem:
+                        p = filedialog.askopenfilename(
+                            filetypes=[("PEM Certificate","*.pem *.crt *.cer"),("All","*.*")])
+                    else:
+                        p = filedialog.askopenfilename(
                             filetypes=[("Text","*.txt"),("All","*.*")])
                     if p: var.set(p)
                 ttk.Button(inner, text="⊞", style="Subtle.TButton",
@@ -3567,17 +4145,19 @@ class App(tk.Tk):
                 "Error", "Set GitHub Owner and Repo in Settings"))
             self.after(0, self.progress.stop); return
 
-        hdrs = gh_headers(token)
+        hdrs       = gh_headers(token)
+        api_base   = self.config_data.get("github_api_url", "https://api.github.com").rstrip("/")
+        verify     = _ssl_verify(self.config_data)
         try:
             pr_r = requests.get(
-                f"https://api.github.com/repos/{owner}/{repo}/pulls/{num}",
-                headers=hdrs, timeout=15)
+                f"{api_base}/repos/{owner}/{repo}/pulls/{num}",
+                headers=hdrs, timeout=15, verify=verify)
             pr_r.raise_for_status()
             pr   = pr_r.json()
 
             files_r = requests.get(
-                f"https://api.github.com/repos/{owner}/{repo}/pulls/{num}/files?per_page=100",
-                headers=hdrs, timeout=15)
+                f"{api_base}/repos/{owner}/{repo}/pulls/{num}/files?per_page=100",
+                headers=hdrs, timeout=15, verify=verify)
             files_r.raise_for_status()
             files = files_r.json()
         except requests.HTTPError as e:
@@ -4141,10 +4721,11 @@ class App(tk.Tk):
             else:
                 payload["fields"][jk] = val
 
-        hdrs = jira_auth_headers(email, jira_tok)
+        hdrs   = jira_auth_headers(email, jira_tok)
+        verify = _ssl_verify(self.config_data)
         try:
             resp = requests.post(f"{base_url}/rest/api/3/issue",
-                                 json=payload, headers=hdrs, timeout=20)
+                                 json=payload, headers=hdrs, timeout=20, verify=verify)
             resp.raise_for_status()
             data = resp.json()
         except requests.HTTPError as e:
@@ -4179,7 +4760,7 @@ class App(tk.Tk):
                         f"{base_url}/rest/api/3/issue/{issue_key}/attachments",
                         headers=ah,
                         files={"file": (os.path.basename(path), fh, mime)},
-                        timeout=30)
+                        timeout=30, verify=verify)
             except Exception:
                 pass
 
