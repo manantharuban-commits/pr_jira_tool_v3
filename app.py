@@ -20,6 +20,8 @@ import json, os, re, threading, webbrowser, base64, copy, tempfile, html
 from datetime import datetime
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
@@ -358,6 +360,7 @@ DEFAULT_CONFIG = {
     "word_doc_output_dir": BASE_DIR,
     "ssl_cert_file":       os.path.join(BASE_DIR, "certs", "dummy.pem"),
     "jira_ssl_cert_file":  os.path.join(BASE_DIR, "certs", "jira_dummy.pem"),
+    "jira_ssl_verify":     True,
     "fields":              BUILTIN_FIELDS,
     "field_defaults":      {},   # key → default_value overrides
     "theme":               "dark",
@@ -425,8 +428,11 @@ def _ssl_verify(cfg):
     return True
 
 def _jira_ssl_verify(cfg):
-    """Jira SSL cert. Returns cert path or True."""
-    p = (cfg or {}).get("jira_ssl_cert_file", "")
+    """Jira SSL. Returns False (skip), cert path, or True (system CA)."""
+    cfg = cfg or {}
+    if not cfg.get("jira_ssl_verify", True):
+        return False
+    p = cfg.get("jira_ssl_cert_file", "")
     if p and os.path.isfile(p):
         return p
     return True
@@ -4757,10 +4763,29 @@ class App(tk.Tk):
         tk.Label(chk_inner, text="Open generated .docx automatically after saving",
                  bg=chk_row_bg, fg=C["muted"], font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
 
+        # ── Jira SSL verify toggle ────────────────────────────────────────────
+        ssl_row_bg = C["bg"] if len(defs) % 2 == 0 else C["card"]
+        ssl_row = tk.Frame(sf, bg=ssl_row_bg)
+        ssl_row.pack(fill="x", padx=16, pady=0)
+        ssl_inner = tk.Frame(ssl_row, bg=ssl_row_bg)
+        ssl_inner.pack(fill="x", padx=6, pady=5)
+        ssl_lbl_f = tk.Frame(ssl_inner, bg=ssl_row_bg)
+        ssl_lbl_f.pack(side="left")
+        tk.Label(ssl_lbl_f, text="⊡", bg=ssl_row_bg, fg=C["red"],
+                 font=("Segoe UI", 9), width=2).pack(side="left")
+        tk.Label(ssl_lbl_f, text="Jira SSL Verification", bg=ssl_row_bg, fg=C["muted"],
+                 width=22, anchor="w", font=("Segoe UI", 9)).pack(side="left")
+        jira_ssl_var = tk.BooleanVar(value=bool(self.config_data.get("jira_ssl_verify", True)))
+        ttk.Checkbutton(ssl_inner, variable=jira_ssl_var).pack(side="left")
+        tk.Label(ssl_inner,
+                 text="Uncheck to skip SSL verification (use for self-signed / internal CA certs)",
+                 bg=ssl_row_bg, fg=C["muted"], font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
+
         def _save():
             for k, v2 in vars_.items():
                 self.config_data[k] = v2.get()
             self.config_data["auto_open_word_doc"] = auto_open_var.get()
+            self.config_data["jira_ssl_verify"]    = jira_ssl_var.get()
             save_config(self.config_data)
             self._set_status("Settings saved")
             win.destroy()
