@@ -11,7 +11,24 @@
       "Bash(python -m py_compile app.py)",
       "Bash(timeout 5 python app.py)",
       "Skill(update-config)",
-      "Yes for all"
+      "Yes for all",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('main.py', encoding='utf-8'\\).read\\(\\)\\); print\\('main.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('core/word_doc.py', encoding='utf-8'\\).read\\(\\)\\); print\\('word_doc.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('core/api.py', encoding='utf-8'\\).read\\(\\)\\); print\\('api.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('core/config.py', encoding='utf-8'\\).read\\(\\)\\); print\\('config.py OK'\\)\")",
+      "Bash(python -c \"import nicegui; print\\('nicegui', nicegui.__version__\\)\")",
+      "Bash(pip install *)",
+      "Bash(python *)",
+      "Bash(start python *)",
+      "Bash(Start-Sleep -Seconds 5)",
+      "Bash(Invoke-WebRequest -Uri \"http://127.0.0.1:8080\" -TimeoutSec 5 -UseBasicParsing)",
+      "Bash(Select-Object -First 3)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8080/)",
+      "PowerShell(Start-Sleep -Seconds 6; try { $r = Invoke-WebRequest -Uri \"http://127.0.0.1:8080\" -TimeoutSec 5 -UseBasicParsing; \"HTTP $\\($r.StatusCode\\)\" } catch { \"Error: $_\" })",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

@@ -15,7 +15,7 @@ NEW in v3
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, scrolledtext
+from tkinter import ttk, messagebox, filedialog, scrolledtext, simpledialog
 import json, os, re, threading, webbrowser, base64, copy, tempfile, html
 from datetime import datetime
 
@@ -271,9 +271,56 @@ BUILTIN_FIELDS = [
      "choices": ["Bug","Enhancement","Task","Story","Epic","Sub-task","Incident"],
      "default": "Bug", "jira_key": "issuetype",              "jira_field": True,
      "required": True,  "enabled": True, "show_label_in_jira": False},
-    {"label": "Reporter",     "key": "reporter",    "type": "text",
-     "choices": [], "default": "", "jira_key": "reporter",   "jira_field": True,
-     "required": False, "enabled": True, "show_label_in_jira": False},
+    {"label": "Reporter",          "key": "reporter",       "type": "text",
+     "choices": [], "default": "", "jira_key": "reporter",           "jira_field": True,
+     "required": False, "enabled": True,  "show_label_in_jira": False},
+    # ── Additional Jira API fields (disabled — enable via Jira Fields button) ──
+    {"label": "Assignee",          "key": "assignee",       "type": "text",
+     "choices": [], "default": "", "jira_key": "assignee",           "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Priority (API)",    "key": "jira_priority",  "type": "dropdown",
+     "choices": ["Highest","High","Medium","Low","Lowest"],
+     "default": "Medium",           "jira_key": "priority",          "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Labels",            "key": "labels",         "type": "text",
+     "choices": [], "default": "", "jira_key": "labels",             "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Components (API)",  "key": "jira_components","type": "text",
+     "choices": [], "default": "", "jira_key": "components",         "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Fix Versions (API)","key": "jira_fix_versions","type": "text",
+     "choices": [], "default": "", "jira_key": "fixVersions",        "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Affects Versions",  "key": "aff_versions",   "type": "text",
+     "choices": [], "default": "", "jira_key": "versions",           "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Due Date",          "key": "due_date",       "type": "date",
+     "choices": [], "default": "", "jira_key": "duedate",            "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Environment (API)", "key": "jira_env",       "type": "text",
+     "choices": [], "default": "", "jira_key": "environment",        "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Epic Link",         "key": "epic_link",      "type": "text",
+     "choices": [], "default": "", "jira_key": "customfield_10014",  "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Sprint",            "key": "sprint",         "type": "text",
+     "choices": [], "default": "", "jira_key": "customfield_10020",  "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Story Points",      "key": "story_points",   "type": "number",
+     "choices": [], "default": "", "jira_key": "customfield_10016",  "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Original Estimate", "key": "orig_estimate",  "type": "text",
+     "choices": [], "default": "", "jira_key": "timeoriginalestimate","jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Parent Issue",      "key": "parent_issue",   "type": "text",
+     "choices": [], "default": "", "jira_key": "parent",             "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Security Level",    "key": "security_level", "type": "text",
+     "choices": [], "default": "", "jira_key": "security",           "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
+    {"label": "Watchers",          "key": "watchers",       "type": "text",
+     "choices": [], "default": "", "jira_key": "watches",            "jira_field": True,
+     "required": False, "enabled": False, "show_label_in_jira": False},
     # ── Description-only fields (appear in Jira ticket body, not as top-level fields) ──
     {"label": "Dependency",   "key": "dependency",  "type": "text",
      "choices": [], "default": "", "jira_key": "dependency",
@@ -312,6 +359,10 @@ DEFAULT_CONFIG = {
     "ssl_cert_file":       os.path.join(BASE_DIR, "certs", "dummy.pem"),
     "fields":              BUILTIN_FIELDS,
     "field_defaults":      {},   # key → default_value overrides
+    "theme":               "dark",
+    "recent_tickets":      [],   # last 10 created Jira tickets
+    "field_presets":       {},   # name → {key: value} maps
+    "auto_open_word_doc":  False,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1544,9 +1595,9 @@ class FieldManagerDialog(tk.Toplevel):
                   activebackground="#2ea043", cursor="hand2",
                   command=self._apply).pack(side="right")
         tk.Button(inner_bot, text="✕  Cancel",
-                  bg=C["card2"], fg=C["muted"], relief="flat",
+                  bg=C["red"], fg="#ffffff", relief="flat",
                   font=("Segoe UI", 10), padx=12, pady=6,
-                  activebackground=C["border"], cursor="hand2",
+                  activebackground="#c0392b", cursor="hand2",
                   command=self.destroy).pack(side="right", padx=(0, 8))
 
     def _render_rows(self):
@@ -1795,9 +1846,9 @@ class FieldManagerDialog(tk.Toplevel):
                   cursor="hand2", activebackground="#2ea043",
                   command=_create).pack(side="right")
         tk.Button(brow, text="✕  Cancel",
-                  bg=C["card2"], fg=C["muted"], relief="flat",
+                  bg=C["red"], fg="#ffffff", relief="flat",
                   font=("Segoe UI", 10), padx=12, pady=6,
-                  activebackground=C["border"], cursor="hand2",
+                  activebackground="#c0392b", cursor="hand2",
                   command=dlg.destroy).pack(side="right", padx=(0, 8))
 
     def _edit_choices_dialog(self, fd, combobox, def_var):
@@ -1850,9 +1901,9 @@ class FieldManagerDialog(tk.Toplevel):
         tk.Button(br, text="✦  Save", bg=C["green"], fg="#ffffff", relief="flat",
                   font=("Segoe UI", 10, "bold"), padx=14, pady=6,
                   cursor="hand2", command=_save).pack(side="right")
-        tk.Button(br, text="✕  Cancel", bg=C["card2"], fg=C["muted"], relief="flat",
+        tk.Button(br, text="✕  Cancel", bg=C["red"], fg="#ffffff", relief="flat",
                   font=("Segoe UI", 10), padx=12, pady=6,
-                  activebackground=C["border"], cursor="hand2",
+                  activebackground="#c0392b", cursor="hand2",
                   command=dlg.destroy).pack(side="right", padx=(0, 8))
 
     def _apply(self):
@@ -1867,6 +1918,433 @@ class FieldManagerDialog(tk.Toplevel):
             if not meta["jira_var"].get():
                 fd["jira_key"] = None
         self.result = self._fields
+        self.destroy()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  FieldToggleDialog  – simple enable/disable list for a filtered field set
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FieldToggleDialog(tk.Toplevel):
+    """
+    Popup showing a filtered list of fields with enable/disable checkboxes.
+    filter_fn: callable(fd) → bool to select which fields to display.
+    Returns updated fields list via .result after apply.
+    """
+
+    def __init__(self, parent, fields, title, subtitle, filter_fn, accent_color=None):
+        super().__init__(parent)
+        self.title(f"{APP_NAME}  —  {title}")
+        self.geometry("520x560")
+        self.minsize(440, 380)
+        self.configure(bg=C["bg"])
+        self.grab_set()
+        self.transient(parent)
+
+        self._all_fields = fields
+        self._filter_fn  = filter_fn
+        self._accent     = accent_color or C["accent"]
+        self.result      = None
+        self._vars       = {}
+
+        self._build(title, subtitle)
+
+    def _build(self, title, subtitle):
+        tk.Frame(self, bg=self._accent, height=3).pack(fill="x")
+        hdr = tk.Frame(self, bg=C["surface"])
+        hdr.pack(fill="x")
+        tk.Frame(hdr, bg=self._accent, width=4).pack(side="left", fill="y")
+        ti = tk.Frame(hdr, bg=C["surface"]); ti.pack(side="left", padx=14, pady=12)
+        tk.Label(ti, text=title, bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(ti, text=subtitle, bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+
+        # column headers
+        ch = tk.Frame(self, bg=C["card"])
+        ch.pack(fill="x")
+        tk.Label(ch, text="On", bg=C["card"], fg=C["accent"],
+                 font=("Segoe UI", 8, "bold"), width=4).pack(side="left", padx=(14, 0), pady=5)
+        tk.Label(ch, text="Field", bg=C["card"], fg=C["accent"],
+                 font=("Segoe UI", 8, "bold")).pack(side="left", padx=8, pady=5)
+        tk.Label(ch, text="Jira API Key", bg=C["card"], fg=C["accent"],
+                 font=("Segoe UI", 8, "bold")).pack(side="right", padx=14, pady=5)
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+
+        # scrollable list
+        outer = tk.Frame(self, bg=C["bg"])
+        outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, bg=C["bg"], highlightthickness=0)
+        vbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        list_frame = tk.Frame(canvas, bg=C["bg"])
+        win = canvas.create_window((0, 0), window=list_frame, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
+        list_frame.bind("<Configure>",
+                        lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        filtered = [fd for fd in self._all_fields if self._filter_fn(fd)]
+        for i, fd in enumerate(filtered):
+            bg  = C["card"] if i % 2 == 0 else C["surface"]
+            req = fd.get("required", False)
+
+            row = tk.Frame(list_frame, bg=bg)
+            row.pack(fill="x")
+
+            en_var = tk.BooleanVar(value=fd.get("enabled", True))
+            self._vars[fd["key"]] = en_var
+
+            cb = tk.Checkbutton(row, variable=en_var, bg=bg, fg=C["text"],
+                                selectcolor=C["cb_sel"], activebackground=bg,
+                                activeforeground=C["text"],
+                                relief="flat", bd=0, cursor="hand2")
+            cb.pack(side="left", padx=(14, 4), pady=8)
+
+            lbl_fg = C["text"] if fd.get("enabled", True) else C["muted"]
+            tk.Label(row, text=fd["label"],
+                     bg=bg, fg=lbl_fg,
+                     font=("Segoe UI", 10, "bold" if req else "normal"),
+                     anchor="w").pack(side="left", fill="x", expand=True, pady=8)
+
+            if req:
+                tk.Label(row, text="req", bg=bg, fg=C["purple"],
+                         font=("Segoe UI", 7, "italic")).pack(side="right", padx=(4, 2), pady=8)
+
+            jk = fd.get("jira_key", "") or ""
+            tk.Label(row, text=jk, bg=bg, fg=C["muted"],
+                     font=("Segoe UI", 8, "italic"),
+                     anchor="e", padx=12).pack(side="right", pady=8)
+
+            tk.Frame(list_frame, bg=C["border"], height=1).pack(fill="x")
+
+        # bottom bar
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+        bot = tk.Frame(self, bg=C["surface"])
+        bot.pack(fill="x", side="bottom")
+        inner_bot = tk.Frame(bot, bg=C["surface"])
+        inner_bot.pack(fill="x", padx=14, pady=10)
+
+        tk.Button(inner_bot, text="✦  Apply & Close",
+                  bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=16, pady=6,
+                  activebackground="#2ea043", cursor="hand2",
+                  command=self._apply).pack(side="right")
+        tk.Button(inner_bot, text="✕  Cancel",
+                  bg=C["red"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground="#c0392b", cursor="hand2",
+                  command=self.destroy).pack(side="right", padx=(0, 8))
+
+    def _apply(self):
+        for fd in self._all_fields:
+            if fd["key"] in self._vars:
+                fd["enabled"] = self._vars[fd["key"]].get()
+        self.result = self._all_fields
+        self.destroy()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  DescInfoDialog  – manage description-body fields with value inputs
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DescInfoDialog(tk.Toplevel):
+    """
+    Shows all non-jira_field fields.  Each row has:
+      • enable/disable checkbox
+      • field label
+      • actual input widget (dropdown or text) for editing the value/default
+    On apply: persists enabled state + current value as new default.
+    """
+
+    def __init__(self, parent, fields):
+        super().__init__(parent)
+        self.title(f"{APP_NAME}  —  Description Info")
+        self.geometry("600x580")
+        self.minsize(480, 400)
+        self.configure(bg=C["bg"])
+        self.grab_set()
+        self.transient(parent)
+
+        self._fields = copy.deepcopy(fields)
+        self.result  = None
+        self._rows   = []
+
+        self._build()
+
+    def _build(self):
+        tk.Frame(self, bg=C["purple"], height=3).pack(fill="x")
+        hdr = tk.Frame(self, bg=C["surface"])
+        hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C["purple"], width=4).pack(side="left", fill="y")
+        ti = tk.Frame(hdr, bg=C["surface"]); ti.pack(side="left", padx=14, pady=12)
+        hdr_row = tk.Frame(ti, bg=C["surface"]); hdr_row.pack(anchor="w")
+        tk.Label(hdr_row, text="✐", bg=C["surface"], fg=C["purple"],
+                 font=("Segoe UI", 14)).pack(side="left", padx=(0, 8))
+        tk.Label(hdr_row, text="Description Info",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 13, "bold")).pack(side="left")
+        tk.Label(ti, text="Fields written into the Jira description body as  Label: Value",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+
+        # column headers
+        ch = tk.Frame(self, bg=C["card"]); ch.pack(fill="x")
+        for txt, anchor, side, pad in [
+            ("On",          "w", "left", (14, 4)),
+            ("Field Label", "w", "left", (4, 8)),
+            ("Value",       "w", "left", (0, 0)),
+        ]:
+            tk.Label(ch, text=txt, bg=C["card"], fg=C["purple"],
+                     font=("Segoe UI", 8, "bold"), anchor=anchor
+                     ).pack(side=side, padx=pad, pady=5)
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+
+        # scrollable list
+        outer = tk.Frame(self, bg=C["bg"]); outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, bg=C["bg"], highlightthickness=0)
+        vbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        self._list_frame = tk.Frame(canvas, bg=C["bg"])
+        win = canvas.create_window((0, 0), window=self._list_frame, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
+        self._list_frame.bind("<Configure>",
+                              lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        self._render_rows()
+
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+        bot = tk.Frame(self, bg=C["surface"]); bot.pack(fill="x", side="bottom")
+        inner_bot = tk.Frame(bot, bg=C["surface"]); inner_bot.pack(fill="x", padx=14, pady=10)
+
+        tk.Button(inner_bot, text="⊕  Add Custom Field",
+                  bg=C["accent_dim"], fg=C["accent"], relief="flat",
+                  font=("Segoe UI", 9, "bold"), padx=12, pady=6,
+                  activebackground=C["border"], cursor="hand2",
+                  command=self._add_field).pack(side="left")
+
+        tk.Button(inner_bot, text="✦  Apply & Close",
+                  bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=16, pady=6,
+                  activebackground="#2ea043", cursor="hand2",
+                  command=self._apply).pack(side="right")
+        tk.Button(inner_bot, text="✕  Cancel",
+                  bg=C["red"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground="#c0392b", cursor="hand2",
+                  command=self.destroy).pack(side="right", padx=(0, 8))
+
+    def _render_rows(self):
+        for w in self._list_frame.winfo_children():
+            w.destroy()
+        self._rows = []
+
+        desc_fields = [fd for fd in self._fields if not fd.get("jira_field")]
+        for i, fd in enumerate(desc_fields):
+            bg      = C["card"] if i % 2 == 0 else C["surface"]
+            ftype   = fd.get("type", "text")
+            choices = fd.get("choices", [])
+
+            row = tk.Frame(self._list_frame, bg=bg)
+            row.pack(fill="x", padx=2, pady=0)
+
+            # enable checkbox
+            en_var = tk.BooleanVar(value=fd.get("enabled", True))
+            tk.Checkbutton(row, variable=en_var, bg=bg, fg=C["text"],
+                           selectcolor=C["cb_sel"], activebackground=bg,
+                           activeforeground=C["text"],
+                           relief="flat", bd=0, cursor="hand2"
+                           ).pack(side="left", padx=(12, 4), pady=6)
+
+            # label column (fixed width)
+            lf = tk.Frame(row, bg=bg, width=152); lf.pack(side="left", fill="y")
+            lf.pack_propagate(False)
+            lbl_w = tk.Label(lf, text=fd["label"], bg=bg,
+                             fg=C["text"] if fd.get("enabled", True) else C["muted"],
+                             font=("Segoe UI", 9, "bold" if fd.get("required") else "normal"),
+                             anchor="w")
+            lbl_w.pack(anchor="w", pady=6)
+            hint = FIELD_HINTS.get(fd.get("key", ""), "")
+            if hint:
+                Tooltip(lbl_w, hint)
+
+            # value input
+            val_var = tk.StringVar(value=fd.get("default", ""))
+            if ftype == "dropdown" and choices:
+                w = ttk.Combobox(row, textvariable=val_var, values=choices, state="normal")
+            else:
+                w = ttk.Entry(row, textvariable=val_var)
+            w.pack(side="left", fill="x", expand=True, padx=(4, 4), pady=5)
+
+            # edit choices button for dropdown fields
+            if ftype == "dropdown":
+                def _edit_cb(fd=fd, cb=w, v=val_var):
+                    self._edit_choices(fd, cb, v)
+                tk.Button(row, text="✎", bg=bg, fg=C["purple"],
+                          relief="flat", font=("Segoe UI", 10), padx=5, pady=1,
+                          activebackground=C["border"], cursor="hand2",
+                          command=_edit_cb).pack(side="left", padx=(0, 4))
+
+            # delete button for custom fields
+            if fd.get("custom"):
+                def _del(fd=fd):
+                    if messagebox.askyesno("Remove", f'Remove "{fd["label"]}"?', parent=self):
+                        self._fields.remove(fd)
+                        self._render_rows()
+                tk.Button(row, text="✕", bg=bg, fg=C["red"],
+                          relief="flat", font=("Segoe UI", 9), padx=4, pady=1,
+                          activebackground=C["border"], cursor="hand2",
+                          command=_del).pack(side="left", padx=(0, 8))
+
+            tk.Frame(self._list_frame, bg=C["border"], height=1).pack(fill="x")
+            self._rows.append(dict(fd=fd, en_var=en_var, val_var=val_var))
+
+    def _edit_choices(self, fd, combobox, val_var):
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Edit choices — {fd['label']}")
+        dlg.geometry("360x320")
+        dlg.configure(bg=C["bg"])
+        dlg.grab_set()
+        dlg.transient(self)
+
+        tk.Label(dlg, text=f"Choices for \"{fd['label']}\"",
+                 bg=C["bg"], fg=C["accent"],
+                 font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(dlg, text="One value per line",
+                 bg=C["bg"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", padx=16, pady=(0, 8))
+
+        txt = scrolledtext.ScrolledText(dlg, height=10,
+                                        bg=C["inp"], fg=C["text"],
+                                        insertbackground=C["text"],
+                                        relief="flat", font=("Segoe UI", 10),
+                                        highlightthickness=1,
+                                        highlightbackground=C["border"])
+        txt.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+        txt.insert("1.0", "\n".join(fd.get("choices", [])))
+
+        def _save():
+            lines = [l.strip() for l in txt.get("1.0", "end-1c").splitlines() if l.strip()]
+            fd["choices"] = lines
+            if combobox:
+                combobox.config(values=lines)
+                if val_var.get() not in lines and lines:
+                    val_var.set(lines[0])
+            dlg.destroy()
+
+        br = tk.Frame(dlg, bg=C["bg"]); br.pack(fill="x", padx=16, pady=(0, 14))
+        tk.Button(br, text="✦  Save", bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=14, pady=6,
+                  cursor="hand2", command=_save).pack(side="right")
+        tk.Button(br, text="✕  Cancel", bg=C["red"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground="#c0392b", cursor="hand2",
+                  command=dlg.destroy).pack(side="right", padx=(0, 8))
+
+    def _add_field(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("Add Custom Description Field")
+        dlg.geometry("460x340")
+        dlg.configure(bg=C["bg"])
+        dlg.grab_set()
+        dlg.transient(self)
+
+        tk.Frame(dlg, bg=C["purple"], height=3).pack(fill="x")
+        hdr = tk.Frame(dlg, bg=C["surface"]); hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C["purple"], width=4).pack(side="left", fill="y")
+        hdr_inner = tk.Frame(hdr, bg=C["surface"]); hdr_inner.pack(side="left", padx=12, pady=10)
+        tk.Label(hdr_inner, text="⊕  New Description Field",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        tk.Label(hdr_inner, text="Appears in Jira description as  Label: Value",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x")
+
+        def _row(lbl_text, idx):
+            bg = C["card"] if idx % 2 == 0 else C["bg"]
+            f = tk.Frame(dlg, bg=bg); f.pack(fill="x", padx=14)
+            inner = tk.Frame(f, bg=bg); inner.pack(fill="x", padx=6, pady=5)
+            tk.Label(inner, text=lbl_text, bg=bg, fg=C["muted"],
+                     width=16, anchor="w", font=("Segoe UI", 9)).pack(side="left")
+            return inner
+
+        lbl_var = tk.StringVar()
+        ttk.Entry(_row("Field Label *", 0), textvariable=lbl_var, width=26
+                  ).pack(side="left", fill="x", expand=True)
+
+        type_var = tk.StringVar(value="text")
+        r2 = _row("Input Type", 1)
+        ttk.Combobox(r2, textvariable=type_var,
+                     values=["text", "dropdown", "number", "date"],
+                     state="readonly", width=14).pack(side="left")
+
+        def_var = tk.StringVar()
+        ttk.Entry(_row("Default Value", 2), textvariable=def_var, width=26
+                  ).pack(side="left", fill="x", expand=True)
+
+        choices_var = tk.StringVar()
+        r4 = _row("Choices (csv)", 3)
+        choices_entry = ttk.Entry(r4, textvariable=choices_var, width=26)
+
+        def _on_type(*_):
+            if type_var.get() == "dropdown":
+                choices_entry.pack(side="left", fill="x", expand=True)
+            else:
+                choices_entry.pack_forget()
+        type_var.trace_add("write", _on_type); _on_type()
+
+        def _create():
+            label = lbl_var.get().strip()
+            if not label:
+                messagebox.showwarning("Required", "Field Label is required", parent=dlg)
+                return
+            key = label.lower().replace(" ", "_")
+            choices = [c.strip() for c in choices_var.get().split(",") if c.strip()] \
+                      if type_var.get() == "dropdown" else []
+            self._fields.append(dict(
+                label=label, key=key, type=type_var.get(), choices=choices,
+                default=def_var.get().strip(), jira_key=None,
+                show_label_in_jira=True, required=False, enabled=True, custom=True,
+            ))
+            self._render_rows()
+            dlg.destroy()
+
+        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x")
+        brow = tk.Frame(dlg, bg=C["surface"]); brow.pack(fill="x", padx=16, pady=12)
+        tk.Button(brow, text="⊕  Add Field", bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=14, pady=6,
+                  cursor="hand2", activebackground="#2ea043",
+                  command=_create).pack(side="right")
+        tk.Button(brow, text="✕  Cancel", bg=C["red"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground="#c0392b", cursor="hand2",
+                  command=dlg.destroy).pack(side="right", padx=(0, 8))
+
+    def _apply(self):
+        for meta in self._rows:
+            meta["fd"]["enabled"] = meta["en_var"].get()
+            meta["fd"]["default"] = meta["val_var"].get()
+        # copy updated desc fields back into full fields list
+        updated_keys = {fd["key"] for fd in self._fields if not fd.get("jira_field")}
+        updated_map  = {fd["key"]: fd for fd in self._fields}
+        # merge: keep jira fields from original order, replace desc fields with updated
+        merged = []
+        seen = set()
+        for fd in self._fields:
+            if fd["key"] not in seen:
+                merged.append(fd)
+                seen.add(fd["key"])
+        self.result = merged
         self.destroy()
 
 
@@ -2521,7 +2999,7 @@ class SqlFilePopup(tk.Toplevel):
                  bg=C["surface"], fg=C["green"],
                  font=("Segoe UI", 9)).pack(side="left")
         tk.Button(btn_row, text="✕  Cancel",
-                  bg=C["card2"], fg=C["muted"], relief="flat",
+                  bg=C["red"], fg="#ffffff", relief="flat",
                   font=("Segoe UI", 10), padx=12, pady=6, cursor="hand2",
                   activebackground=C["border"],
                   command=self.destroy).pack(side="right", padx=8)
@@ -2848,7 +3326,10 @@ class App(tk.Tk):
         self._last_doc_path = None
         self._last_sql_path = None
         self._field_widgets = {}
-        self._theme_name    = "dark"
+        self._theme_name    = self.config_data.get("theme", "dark")
+        C.update(THEMES[self._theme_name])
+        STATUS_BADGE.clear(); STATUS_BADGE.update(C["st_badge"])
+        STATUS_ROW.clear();   STATUS_ROW.update(C["st_row"])
 
         self.title(APP_NAME)
         self.geometry("1140x960")
@@ -2963,6 +3444,8 @@ class App(tk.Tk):
     def _toggle_theme(self):
         state = self._save_app_state()
         self._theme_name = "light" if self._theme_name == "dark" else "dark"
+        self.config_data["theme"] = self._theme_name
+        save_config(self.config_data)
         C.update(THEMES[self._theme_name])
         STATUS_BADGE.clear(); STATUS_BADGE.update(C["st_badge"])
         STATUS_ROW.clear();   STATUS_ROW.update(C["st_row"])
@@ -3070,8 +3553,9 @@ class App(tk.Tk):
                   command=self._toggle_theme).pack(side="right", padx=(6, 0))
 
         for txt, cmd, bg, fg, abg in [
-            ("⊞  Fields",   self._open_field_mgr, C["accent_dim"],  C["accent"], C["border"]),
-            ("⚙  Settings", self._open_settings,  C["card2"],        C["muted"],  C["border"]),
+            ("⊞  Jira Fields",  self._open_jira_fields_mgr, C["accent_dim"], C["accent"],  C["border"]),
+            ("⊞  Desc Info",    self._open_desc_info_mgr,   C["card2"],      C["purple"],  C["border"]),
+            ("⚙  Settings",     self._open_settings,        C["card2"],      C["muted"],   C["border"]),
         ]:
             tk.Button(ctrl_f, text=txt, bg=bg, fg=fg, relief="flat",
                       font=("Segoe UI", 9, "bold"), padx=10, pady=6,
@@ -3169,8 +3653,8 @@ class App(tk.Tk):
         prev_btn = ttk.Button(rp, text="◈  Preview Doc", style="Orange.TButton",
                               command=self._show_preview)
         prev_btn.pack(fill="x", pady=(0, 2))
-        Tooltip(prev_btn, "Add change comments and generate the Word document.")
-        tk.Label(rp, text="Generate Word doc", bg=C["surface"], fg=C["muted"],
+        Tooltip(prev_btn, "Add change comments and generate the Word document.  •  Ctrl+Shift+D")
+        tk.Label(rp, text="Generate Word doc  •  Ctrl+Shift+D", bg=C["surface"], fg=C["muted"],
                  font=("Segoe UI", 7)).pack(anchor="w", padx=2, pady=(0, 8))
 
         self.sql_btn = ttk.Button(rp, text="⊞  SQL PR File", style="Accent.TButton",
@@ -3183,15 +3667,15 @@ class App(tk.Tk):
         jira_btn = ttk.Button(rp, text="✦  Create Jira Ticket", style="Success.TButton",
                               command=self._create_jira_thread)
         jira_btn.pack(fill="x", pady=(0, 2))
-        Tooltip(jira_btn, "Create Jira ticket and attach Word doc + SQL file.")
-        tk.Label(rp, text="Post to Jira + attach files", bg=C["surface"], fg=C["muted"],
+        Tooltip(jira_btn, "Create Jira ticket and attach Word doc + SQL file.  •  Ctrl+Shift+J")
+        tk.Label(rp, text="Post to Jira  •  Ctrl+Shift+J", bg=C["surface"], fg=C["muted"],
                  font=("Segoe UI", 7)).pack(anchor="w", padx=2, pady=(0, 6))
 
         jira_prev_btn = ttk.Button(rp, text="◈  Jira Preview", style="Accent.TButton",
                                    command=self._show_jira_preview)
         jira_prev_btn.pack(fill="x", pady=(0, 2))
-        Tooltip(jira_prev_btn, "Preview the Jira ticket before creating — validate fields and content.")
-        tk.Label(rp, text="Validate before submitting", bg=C["surface"], fg=C["muted"],
+        Tooltip(jira_prev_btn, "Preview the Jira ticket before creating — validate fields and content.  •  Ctrl+Shift+P")
+        tk.Label(rp, text="Validate before submitting  •  Ctrl+Shift+P", bg=C["surface"], fg=C["muted"],
                  font=("Segoe UI", 7)).pack(anchor="w", padx=2, pady=(0, 14))
 
         tk.Frame(rp, bg=C["border"], height=1).pack(fill="x", pady=(0, 12))
@@ -3212,6 +3696,48 @@ class App(tk.Tk):
                       justify="left", cursor="hand2")
         rl.pack(anchor="w")
         rl.bind("<Button-1>", lambda e: self._jira_url and webbrowser.open(self._jira_url))
+
+        # ── Presets section ───────────────────────────────────────────────────
+        tk.Frame(rp, bg=C["border"], height=1).pack(fill="x", pady=(10, 6))
+        preset_hdr = tk.Frame(rp, bg=C["surface"]); preset_hdr.pack(fill="x", pady=(0, 4))
+        tk.Frame(preset_hdr, bg=C["yellow"], width=3).pack(side="left", fill="y", padx=(0, 7))
+        tk.Label(preset_hdr, text="PRESETS", bg=C["surface"], fg=C["yellow"],
+                 font=("Segoe UI", 8, "bold")).pack(side="left", anchor="w")
+
+        self._preset_var = tk.StringVar()
+        self._preset_cb  = ttk.Combobox(rp, textvariable=self._preset_var,
+                                        state="readonly", width=18)
+        self._preset_cb.pack(fill="x", pady=(0, 4))
+        self._refresh_preset_list()
+
+        preset_btns = tk.Frame(rp, bg=C["surface"]); preset_btns.pack(fill="x", pady=(0, 2))
+        tk.Button(preset_btns, text="Load", bg=C["accent_dim"], fg=C["accent"],
+                  relief="flat", font=("Segoe UI", 8, "bold"), padx=8, pady=3,
+                  activebackground=C["border"], cursor="hand2",
+                  command=self._load_preset).pack(side="left")
+        tk.Button(preset_btns, text="Save", bg=C["card2"], fg=C["muted"],
+                  relief="flat", font=("Segoe UI", 8), padx=8, pady=3,
+                  activebackground=C["border"], cursor="hand2",
+                  command=self._save_preset).pack(side="left", padx=(4, 0))
+        tk.Button(preset_btns, text="✕", bg=C["card2"], fg=C["red"],
+                  relief="flat", font=("Segoe UI", 8), padx=6, pady=3,
+                  activebackground=C["border"], cursor="hand2",
+                  command=self._delete_preset).pack(side="right")
+
+        # ── Recent tickets section ────────────────────────────────────────────
+        tk.Frame(rp, bg=C["border"], height=1).pack(fill="x", pady=(8, 6))
+        recent_hdr = tk.Frame(rp, bg=C["surface"]); recent_hdr.pack(fill="x", pady=(0, 4))
+        tk.Frame(recent_hdr, bg=C["green"], width=3).pack(side="left", fill="y", padx=(0, 7))
+        tk.Label(recent_hdr, text="RECENT", bg=C["surface"], fg=C["green"],
+                 font=("Segoe UI", 8, "bold")).pack(side="left", anchor="w")
+        see_all = tk.Label(recent_hdr, text="See all →", bg=C["surface"], fg=C["accent"],
+                           font=("Segoe UI", 7), cursor="hand2")
+        see_all.pack(side="right")
+        see_all.bind("<Button-1>", lambda e: self._show_all_recent())
+
+        self._recent_panel = tk.Frame(rp, bg=C["surface"])
+        self._recent_panel.pack(fill="x")
+        self._refresh_recent_panel()
 
         # ── Left content pane ─────────────────────────────────────────────────
         lp = tk.Frame(outer, bg=C["bg"])
@@ -3360,40 +3886,11 @@ class App(tk.Tk):
         tk.Frame(mid, bg=C["border"], width=1).pack(side="left", fill="y", pady=6)
         id_col = tk.Frame(mid, bg=C["bg"]); id_col.pack(side="left", fill="both", expand=True)
 
-        # Jira Fields
-        _frow_count[0] = 0
+        # Jira Fields — section header stays fixed; rows are rebuildable
         _sh(jf_col, "JIRA FIELDS", accent=C["accent"])
-        self._jira_field_widgets = {}
-        for fd in [fd for fd in self.config_data["fields"]
-                   if fd.get("jira_field") and fd.get("enabled", True)]:
-            self._jira_field_widgets[fd["key"]] = _frow(jf_col, fd)
-
-        if "summary" in self._jira_field_widgets:
-            def _sanitize(s):
-                s = re.sub(r'[\[\](){}<>:"/\\|?*\n\r\t]', '_', s)
-                s = re.sub(r'\s+', '_', s.strip())
-                return re.sub(r'_+', '_', s).strip('_')[:80] if s else ""
-            self._last_auto_doc_name  = _sanitize(self._jira_field_widgets["summary"].get())
-            self._last_auto_doc_title = self._jira_field_widgets["summary"].get()
-            self._syncing = False
-            def _on_sum(*_):
-                if getattr(self, "_syncing", False): return
-                self._syncing = True
-                try:
-                    val = self._jira_field_widgets["summary"].get()
-                    fw  = getattr(self, "_field_widgets", {})
-                    if "doc_name" in fw:
-                        cur = fw["doc_name"].get()
-                        if cur in (getattr(self,"_last_auto_doc_name",None), ""):
-                            new = _sanitize(val)
-                            fw["doc_name"].set(new); self._last_auto_doc_name = new
-                    if "doc_title" in fw:
-                        cur = fw["doc_title"].get()
-                        if cur in (getattr(self,"_last_auto_doc_title",None), ""):
-                            fw["doc_title"].set(val); self._last_auto_doc_title = val
-                finally:
-                    self._syncing = False
-            self._jira_field_widgets["summary"].trace_add("write", _on_sum)
+        self._jira_fields_parent = jf_col
+        self._jira_fields_card   = None
+        self._rebuild_jira_fields_section()
 
         # Issue Details
         _frow_count[0] = 0
@@ -3401,6 +3898,12 @@ class App(tk.Tk):
         self._fields_card_parent = id_col
         self._fields_card = None
         self._rebuild_fields_card()
+
+        # ── Keyboard shortcuts ────────────────────────────────────────────────
+        self.bind("<Control-Return>",       lambda e: self._fetch_pr_thread())
+        self.bind("<Control-Shift-J>",      lambda e: self._create_jira_thread())
+        self.bind("<Control-Shift-D>",      lambda e: self._show_preview())
+        self.bind("<Control-Shift-P>",      lambda e: self._show_jira_preview())
 
     # PR fetch card
     def _build_pr_card(self, parent):
@@ -3584,6 +4087,86 @@ class App(tk.Tk):
 
             self._field_widgets[key] = var
 
+    def _rebuild_jira_fields_section(self):
+        if hasattr(self, "_jira_fields_card") and self._jira_fields_card:
+            self._jira_fields_card.destroy()
+
+        flat = tk.Frame(self._jira_fields_parent, bg=C["bg"])
+        flat.pack(fill="x")
+        self._jira_fields_card = flat
+
+        self._jira_field_widgets = {}
+        enabled = [fd for fd in self.config_data["fields"]
+                   if fd.get("jira_field") and fd.get("enabled", True)]
+
+        for idx, fd in enumerate(enabled):
+            key     = fd["key"]; label = fd["label"]
+            ftype   = fd.get("type", "text"); choices = fd.get("choices", [])
+            default = (self.config_data.get("jira_project_key", fd.get("default", ""))
+                       if key == "project" else fd.get("default", ""))
+            req     = fd.get("required", False)
+            row_bg  = C["card"] if idx % 2 == 0 else C["bg"]
+
+            fr = tk.Frame(flat, bg=row_bg)
+            fr.pack(fill="x", padx=10, pady=0)
+            pad_f = tk.Frame(fr, bg=row_bg)
+            pad_f.pack(fill="x", padx=4, pady=(2, 2))
+            lf = tk.Frame(pad_f, bg=row_bg, width=132)
+            lf.pack(side="left", fill="y")
+            lf.pack_propagate(False)
+
+            lbl_w = tk.Label(lf, text=label,
+                             bg=row_bg, fg=C["text"] if req else C["muted"],
+                             font=("Segoe UI", 9, "bold" if req else "normal"),
+                             anchor="w")
+            lbl_w.pack(side="left", anchor="w", pady=4)
+            if req:
+                tk.Label(lf, text=" ●", bg=row_bg, fg=C["accent"],
+                         font=("Segoe UI", 7)).pack(side="left", anchor="w")
+
+            var = tk.StringVar(value=default)
+            if ftype == "dropdown" and choices:
+                w = ttk.Combobox(pad_f, textvariable=var, values=choices, state="readonly")
+            else:
+                w = ttk.Entry(pad_f, textvariable=var)
+            w.pack(side="left", fill="x", expand=True)
+
+            if ftype == "dropdown":
+                def _edit(fd=fd, cb=w, v=var):
+                    self._edit_dropdown_choices(fd, cb, v)
+                tk.Button(pad_f, text="✎", bg=row_bg, fg=C["accent"], relief="flat",
+                          font=("Segoe UI", 9), padx=5, pady=4,
+                          activebackground=C["border"],
+                          cursor="hand2", command=_edit).pack(side="left", padx=(3, 0))
+
+            self._jira_field_widgets[key] = var
+
+        if "summary" in self._jira_field_widgets:
+            def _sanitize(s):
+                s = re.sub(r'[\[\](){}<>:"/\\|?*\n\r\t]', '_', s)
+                s = re.sub(r'\s+', '_', s.strip())
+                return re.sub(r'_+', '_', s).strip('_')[:80] if s else ""
+            self._last_auto_doc_name  = _sanitize(self._jira_field_widgets["summary"].get())
+            self._last_auto_doc_title = self._jira_field_widgets["summary"].get()
+            self._syncing = False
+            def _on_sum(*_):
+                if getattr(self, "_syncing", False): return
+                self._syncing = True
+                try:
+                    val = self._jira_field_widgets["summary"].get()
+                    fw  = getattr(self, "_field_widgets", {})
+                    if "doc_name" in fw:
+                        cur = fw["doc_name"].get()
+                        if cur in (getattr(self, "_last_auto_doc_name", None), ""):
+                            new = _sanitize(val)
+                            fw["doc_name"].set(new); self._last_auto_doc_name = new
+                    if "doc_title" in fw:
+                        cur = fw["doc_title"].get()
+                        if cur in (getattr(self, "_last_auto_doc_title", None), ""):
+                            fw["doc_title"].set(val); self._last_auto_doc_title = val
+                finally:
+                    self._syncing = False
+            self._jira_field_widgets["summary"].trace_add("write", _on_sum)
 
     def _edit_dropdown_choices(self, fd, combobox, var):
         dlg = tk.Toplevel(self)
@@ -3633,9 +4216,9 @@ class App(tk.Tk):
         tk.Button(br, text="✦  Save", bg=C["green"], fg="#ffffff", relief="flat",
                   font=("Segoe UI", 10, "bold"), padx=14, pady=6,
                   cursor="hand2", command=_save).pack(side="right")
-        tk.Button(br, text="✕  Cancel", bg=C["card2"], fg=C["muted"], relief="flat",
+        tk.Button(br, text="✕  Cancel", bg=C["red"], fg="#ffffff", relief="flat",
                   font=("Segoe UI", 10), padx=12, pady=6,
-                  activebackground=C["border"], cursor="hand2",
+                  activebackground="#c0392b", cursor="hand2",
                   command=dlg.destroy).pack(side="right", padx=(0, 8))
 
     def _build_desc_card(self, parent):
@@ -3995,6 +4578,74 @@ class App(tk.Tk):
                    command=lambda: [win.destroy(),
                                     self._create_jira_thread()]).pack(side="right")
 
+        def _copy_api_json():
+            proj_key_ = self.config_data.get("jira_project_key", "PROJ")
+            _type_map = {"Bug":"Bug","Enhancement":"Story","Task":"Task",
+                         "Story":"Story","Epic":"Epic","Sub-task":"Sub-task","Incident":"Bug"}
+            _issue_type = _type_map.get(fv.get("issue_type","Bug"), "Bug")
+            _detail_bullets = []
+            for _fd in self.config_data["fields"]:
+                if not _fd.get("enabled", True): continue
+                if _fd.get("jira_field"): continue
+                _val = fv.get(_fd["key"], "")
+                if _val:
+                    _show = _fd.get("show_label_in_jira", True)
+                    _txt = f"{_fd['label']}: {_val}" if _show else _val
+                    _detail_bullets.append({
+                        "type": "listItem",
+                        "content": [{"type": "paragraph",
+                                     "content": [{"type": "text", "text": _txt}]}]})
+            _fc_bullets = []
+            for _fc in self.file_comments:
+                _jc = (_fc.get("jira_comment") or _fc.get("comment","")).strip()
+                _t = f"{STATUS_EMOJI.get(_fc['status'],'~')} {_fc['filename']}  [{_fc['status'].upper()}]"
+                if _jc: _t += f"\n    {_jc}"
+                _fc_bullets.append({"type":"listItem","content":[
+                    {"type":"paragraph","content":[{"type":"text","text":_t}]}]})
+            _adf = {"type":"doc","version":1,"content":[
+                {"type":"heading","attrs":{"level":3},
+                 "content":[{"type":"text","text":"Issue Details"}]},
+                {"type":"bulletList","content":_detail_bullets} if _detail_bullets else
+                {"type":"paragraph","content":[{"type":"text","text":""}]},
+                {"type":"heading","attrs":{"level":3},
+                 "content":[{"type":"text","text":"Description"}]},
+                {"type":"paragraph","content":[
+                    {"type":"text","text":fv.get("description") or "No description."}]},
+            ] + ([{"type":"heading","attrs":{"level":3},
+                   "content":[{"type":"text","text":"Changed Files"}]},
+                  {"type":"bulletList","content":_fc_bullets}] if _fc_bullets else [])}
+            _payload = {"fields":{
+                "project":   {"key": fv.get("project") or proj_key_},
+                "summary":   fv.get("summary") or "(no summary)",
+                "issuetype": {"name": _issue_type},
+                "description": _adf,
+            }}
+            if fv.get("reporter"):
+                _payload["fields"]["reporter"] = {"name": fv["reporter"]}
+            _MULTI = {"components","fixVersions","labels"}
+            _NAME  = {"priority","issuetype"}
+            for _fd in self.config_data["fields"]:
+                if _fd.get("jira_field"): continue
+                _jk = _fd.get("jira_key")
+                if not _jk: continue
+                _v = fv.get(_fd["key"],"").strip()
+                if not _v: continue
+                if _jk in _MULTI:
+                    _payload["fields"][_jk] = [{"name": _v}]
+                elif _jk in _NAME:
+                    _payload["fields"][_jk] = {"name": _v}
+                else:
+                    _payload["fields"][_jk] = _v
+            self.clipboard_clear()
+            self.clipboard_append(json.dumps(_payload, indent=2))
+            messagebox.showinfo("Copied", "Jira API payload copied to clipboard.", parent=win)
+
+        tk.Button(btn_row, text="⧉  Copy API JSON",
+                  bg=JC["surface"], fg=JC["accent"], relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground=JC["border"], cursor="hand2",
+                  command=_copy_api_json).pack(side="left")
+
     # ── Settings ─────────────────────────────────────────────────────────────
 
 
@@ -4080,32 +4731,247 @@ class App(tk.Tk):
                 ttk.Button(inner, text="⊞", style="Subtle.TButton",
                            command=_browse).pack(side="left", padx=(6, 0))
 
+        # ── Auto-open Word doc checkbox ───────────────────────────────────────
+        chk_row_bg = C["card"] if len(defs) % 2 == 0 else C["bg"]
+        chk_row = tk.Frame(sf, bg=chk_row_bg)
+        chk_row.pack(fill="x", padx=16, pady=0)
+        chk_inner = tk.Frame(chk_row, bg=chk_row_bg)
+        chk_inner.pack(fill="x", padx=6, pady=5)
+        chk_lbl_f = tk.Frame(chk_inner, bg=chk_row_bg)
+        chk_lbl_f.pack(side="left")
+        tk.Label(chk_lbl_f, text="⊞", bg=chk_row_bg, fg=C["accent"],
+                 font=("Segoe UI", 9), width=2).pack(side="left")
+        tk.Label(chk_lbl_f, text="Auto-open Word Doc", bg=chk_row_bg, fg=C["muted"],
+                 width=22, anchor="w", font=("Segoe UI", 9)).pack(side="left")
+        auto_open_var = tk.BooleanVar(value=bool(self.config_data.get("auto_open_word_doc", False)))
+        ttk.Checkbutton(chk_inner, variable=auto_open_var).pack(side="left")
+        tk.Label(chk_inner, text="Open generated .docx automatically after saving",
+                 bg=chk_row_bg, fg=C["muted"], font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
+
         def _save():
             for k, v2 in vars_.items():
                 self.config_data[k] = v2.get()
+            self.config_data["auto_open_word_doc"] = auto_open_var.get()
             save_config(self.config_data)
             self._set_status("Settings saved")
             win.destroy()
 
+        def _export_config():
+            path = filedialog.asksaveasfilename(
+                parent=win, defaultextension=".json",
+                filetypes=[("JSON", "*.json"), ("All", "*.*")],
+                title="Export Config")
+            if not path: return
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(self.config_data, f, indent=2, default=str)
+                messagebox.showinfo("Export", f"Config exported to:\n{path}", parent=win)
+            except Exception as e:
+                messagebox.showerror("Export Error", str(e), parent=win)
+
+        def _import_config():
+            path = filedialog.askopenfilename(
+                parent=win, filetypes=[("JSON", "*.json"), ("All", "*.*")],
+                title="Import Config")
+            if not path: return
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                required = {"jira_base_url", "github_owner", "fields"}
+                missing = required - set(loaded.keys())
+                if missing:
+                    messagebox.showerror("Import Error",
+                        f"Missing required keys: {', '.join(missing)}", parent=win)
+                    return
+                self.config_data.update(loaded)
+                save_config(self.config_data)
+                for k, v2 in vars_.items():
+                    v2.set(str(self.config_data.get(k, "")))
+                auto_open_var.set(bool(self.config_data.get("auto_open_word_doc", False)))
+                messagebox.showinfo("Import", "Config imported and applied.", parent=win)
+            except Exception as e:
+                messagebox.showerror("Import Error", str(e), parent=win)
+
         br = tk.Frame(sf, bg=C["bg"]); br.pack(fill="x", padx=20, pady=20)
         ttk.Button(br, text="✦  Save Settings", style="Success.TButton",
                    command=_save).pack(side="right")
-        ttk.Button(br, text="✕  Cancel", style="Ghost.TButton",
-                   command=win.destroy).pack(side="right", padx=(0, 8))
+        tk.Button(br, text="✕  Cancel",
+                  bg=C["red"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground="#c0392b", cursor="hand2",
+                  command=win.destroy).pack(side="right", padx=(0, 8))
+        tk.Button(br, text="⬆  Import",
+                  bg=C["card2"], fg=C["text"], relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground=C["border"], cursor="hand2",
+                  command=_import_config).pack(side="left", padx=(0, 6))
+        tk.Button(br, text="⬇  Export",
+                  bg=C["card2"], fg=C["text"], relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground=C["border"], cursor="hand2",
+                  command=_export_config).pack(side="left")
 
-    # ── Field manager ─────────────────────────────────────────────────────────
+    # ── Field managers ────────────────────────────────────────────────────────
 
-    def _open_field_mgr(self):
-        dlg = FieldManagerDialog(self, self.config_data["fields"])
+    def _open_jira_fields_mgr(self):
+        """Popup: enable/disable Jira API fields shown on the left panel."""
+        dlg = FieldToggleDialog(
+            self, self.config_data["fields"],
+            "Jira Fields",
+            "Enable / disable fields sent directly to the Jira API  •  left panel",
+            lambda fd: fd.get("jira_field", False),
+            accent_color=C["accent"],
+        )
         self.wait_window(dlg)
         if dlg.result is not None:
             self.config_data["fields"] = dlg.result
-            # persist defaults
+            save_config(self.config_data)
+            self._rebuild_jira_fields_section()
+            self._set_status("Jira fields updated")
+
+    def _open_desc_info_mgr(self):
+        """Popup: manage Description Info fields — toggle, set values, add custom."""
+        dlg = DescInfoDialog(self, self.config_data["fields"])
+        self.wait_window(dlg)
+        if dlg.result is not None:
+            self.config_data["fields"] = dlg.result
             self.config_data["field_defaults"] = {
                 fd["key"]: fd["default"] for fd in dlg.result}
             save_config(self.config_data)
             self._rebuild_fields_card()
+            self._set_status("Description fields updated")
+
+    def _open_field_mgr(self):
+        """Legacy full field manager (advanced)."""
+        dlg = FieldManagerDialog(self, self.config_data["fields"])
+        self.wait_window(dlg)
+        if dlg.result is not None:
+            self.config_data["fields"] = dlg.result
+            self.config_data["field_defaults"] = {
+                fd["key"]: fd["default"] for fd in dlg.result}
+            save_config(self.config_data)
+            self._rebuild_jira_fields_section()
+            self._rebuild_fields_card()
             self._set_status("Fields updated — defaults saved")
+
+    # ── Recent tickets ────────────────────────────────────────────────────────
+
+    def _refresh_recent_panel(self):
+        if not hasattr(self, "_recent_panel"):
+            return
+        for w in self._recent_panel.winfo_children():
+            w.destroy()
+        recent = self.config_data.get("recent_tickets", [])[:3]
+        if not recent:
+            tk.Label(self._recent_panel, text="No tickets yet",
+                     bg=C["surface"], fg=C["muted"],
+                     font=("Segoe UI", 7, "italic")).pack(anchor="w")
+            return
+        for t in recent:
+            row = tk.Frame(self._recent_panel, bg=C["surface"])
+            row.pack(fill="x", pady=1)
+            key_lbl = tk.Label(row, text=t["key"], bg=C["surface"], fg=C["accent"],
+                               font=("Segoe UI", 8, "bold"), cursor="hand2")
+            key_lbl.pack(side="left")
+            key_lbl.bind("<Button-1>", lambda e, u=t["url"]: webbrowser.open(u))
+            title = t.get("title", "")[:22] + ("…" if len(t.get("title","")) > 22 else "")
+            tk.Label(row, text=f"  {title}", bg=C["surface"], fg=C["muted"],
+                     font=("Segoe UI", 7)).pack(side="left")
+
+    def _show_all_recent(self):
+        recent = self.config_data.get("recent_tickets", [])
+        if not recent:
+            messagebox.showinfo("Recent Tickets", "No tickets created yet.")
+            return
+        dlg = tk.Toplevel(self)
+        dlg.title(f"{APP_NAME}  —  Recent Tickets")
+        dlg.geometry("480x360")
+        dlg.configure(bg=C["bg"])
+        dlg.grab_set()
+        dlg.transient(self)
+        tk.Frame(dlg, bg=C["green"], height=3).pack(fill="x")
+        hdr = tk.Frame(dlg, bg=C["surface"]); hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C["green"], width=4).pack(side="left", fill="y")
+        ti = tk.Frame(hdr, bg=C["surface"]); ti.pack(side="left", padx=14, pady=10)
+        tk.Label(ti, text="Recent Jira Tickets", bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        tk.Label(ti, text="Last 10 tickets created from this session",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w")
+        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x")
+        for i, t in enumerate(recent):
+            bg = C["card"] if i % 2 == 0 else C["surface"]
+            row = tk.Frame(dlg, bg=bg); row.pack(fill="x", padx=8, pady=2)
+            key_lbl = tk.Label(row, text=t["key"], bg=bg, fg=C["accent"],
+                               font=("Segoe UI", 9, "bold"), width=12, anchor="w",
+                               cursor="hand2")
+            key_lbl.pack(side="left", padx=(8, 4), pady=5)
+            key_lbl.bind("<Button-1>", lambda e, u=t["url"]: webbrowser.open(u))
+            tk.Label(row, text=t.get("title","")[:38], bg=bg, fg=C["text"],
+                     font=("Segoe UI", 9), anchor="w").pack(side="left", fill="x", expand=True)
+            tk.Label(row, text=t.get("date",""), bg=bg, fg=C["muted"],
+                     font=("Segoe UI", 8)).pack(side="right", padx=8)
+        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x", pady=(6, 0))
+        tk.Button(dlg, text="Close", bg=C["card2"], fg=C["muted"], relief="flat",
+                  font=("Segoe UI", 9), padx=12, pady=5,
+                  activebackground=C["border"], cursor="hand2",
+                  command=dlg.destroy).pack(side="right", padx=12, pady=8)
+
+    # ── Presets ───────────────────────────────────────────────────────────────
+
+    def _refresh_preset_list(self):
+        if not hasattr(self, "_preset_cb"):
+            return
+        names = list(self.config_data.get("field_presets", {}).keys())
+        self._preset_cb.config(values=names)
+        if names and self._preset_var.get() not in names:
+            self._preset_var.set(names[0])
+        elif not names:
+            self._preset_var.set("")
+
+    def _load_preset(self):
+        name = self._preset_var.get()
+        presets = self.config_data.get("field_presets", {})
+        if name not in presets:
+            messagebox.showwarning("No Preset", "Select a preset first.", parent=self)
+            return
+        values = presets[name]
+        for key, var in {**getattr(self, "_field_widgets", {}),
+                         **getattr(self, "_jira_field_widgets", {})}.items():
+            if key in values:
+                var.set(values[key])
+        self._set_status(f"Preset '{name}' loaded")
+
+    def _save_preset(self):
+        name = simpledialog.askstring(
+            "Save Preset", "Preset name:", parent=self,
+            initialvalue=self._preset_var.get() or "")
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        values = {}
+        for key, var in {**getattr(self, "_field_widgets", {}),
+                         **getattr(self, "_jira_field_widgets", {})}.items():
+            v = var.get().strip()
+            if v:
+                values[key] = v
+        self.config_data.setdefault("field_presets", {})[name] = values
+        save_config(self.config_data)
+        self._refresh_preset_list()
+        self._preset_var.set(name)
+        self._set_status(f"Preset '{name}' saved")
+
+    def _delete_preset(self):
+        name = self._preset_var.get()
+        presets = self.config_data.get("field_presets", {})
+        if name not in presets:
+            messagebox.showwarning("No Preset", "Select a preset to delete.", parent=self)
+            return
+        if messagebox.askyesno("Delete Preset", f'Delete preset "{name}"?', parent=self):
+            del presets[name]
+            save_config(self.config_data)
+            self._refresh_preset_list()
+            self._set_status(f"Preset '{name}' deleted")
 
     # ── Fetch PR ──────────────────────────────────────────────────────────────
 
@@ -4617,6 +5483,8 @@ class App(tk.Tk):
         self._last_doc_path = path
         self.after(0, self.progress.stop)
         self.after(0, lambda: self._set_status("Word document saved"))
+        if self.config_data.get("auto_open_word_doc") and path:
+            self.after(0, lambda p=path: os.startfile(p))
         if after_save:
             self.after(0, lambda p=path: after_save(p))
 
@@ -4739,6 +5607,19 @@ class App(tk.Tk):
         issue_key = data.get("key", "")
         issue_url = f"{base_url}/browse/{issue_key}"
         self._jira_url = issue_url
+
+        # save to recent tickets
+        fv_summary = fv.get("summary", "")[:60]
+        recent = self.config_data.setdefault("recent_tickets", [])
+        recent.insert(0, {
+            "key":   issue_key,
+            "url":   issue_url,
+            "title": fv_summary,
+            "date":  datetime.now().strftime("%Y-%m-%d"),
+        })
+        self.config_data["recent_tickets"] = recent[:10]
+        save_config(self.config_data)
+        self.after(0, self._refresh_recent_panel)
 
         # generate word doc
         doc_path = None

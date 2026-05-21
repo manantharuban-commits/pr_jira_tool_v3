@@ -1,11 +1,34 @@
 -- ====================================================================
 -- PR #42: feat: inventory & order management SQL overhaul
--- Generated : 2026-05-19 20:46:44
+-- Generated : 2026-05-21 10:32:05
 -- Files     : 3
 -- ====================================================================
 
 -- --------------------------------------------------------------------
--- Step 1: orders
+-- Step 1: v_customer_summary
+-- File  : db/views/v_customer_summary.sql
+-- Status: MODIFIED  (+3 / -2)
+-- --------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW v_customer_summary AS
+SELECT
+    c.customer_id,
+    c.full_name,
+    c.email,
+    c.created_date,
+    COUNT(o.order_id)       AS total_orders,
+    NVL(lp.tier, 'BRONZE')  AS loyalty_tier
+FROM customers c
+LEFT JOIN orders o         ON o.customer_id  = c.customer_id
+LEFT JOIN loyalty_points lp ON lp.customer_id = c.customer_id
+WHERE c.status = 'ACTIVE'
+GROUP BY
+    c.customer_id, c.full_name, c.email,
+    c.created_date, lp.tier;
+
+
+-- --------------------------------------------------------------------
+-- Step 2: orders
 -- File  : db/procedures/sp_update_order_status.sql
 -- Status: MODIFIED  (+18 / -8)
 -- --------------------------------------------------------------------
@@ -53,7 +76,7 @@ END sp_update_order_status;
 
 
 -- --------------------------------------------------------------------
--- Step 2: PACKAGE pkg_inventory_mgmt
+-- Step 3: PACKAGE pkg_inventory_mgmt
 -- File  : db/packages/pkg_inventory_mgmt.sql
 -- Status: ADDED  (+72 / -0)
 -- --------------------------------------------------------------------
@@ -156,27 +179,4 @@ CREATE OR REPLACE PACKAGE BODY pkg_inventory_mgmt AS
     END get_available_qty;
 
 END pkg_inventory_mgmt;
-
-
--- --------------------------------------------------------------------
--- Step 3: v_customer_summary
--- File  : db/views/v_customer_summary.sql
--- Status: MODIFIED  (+3 / -2)
--- --------------------------------------------------------------------
-
-CREATE OR REPLACE VIEW v_customer_summary AS
-SELECT
-    c.customer_id,
-    c.full_name,
-    c.email,
-    c.created_date,
-    COUNT(o.order_id)       AS total_orders,
-    NVL(lp.tier, 'BRONZE')  AS loyalty_tier
-FROM customers c
-LEFT JOIN orders o         ON o.customer_id  = c.customer_id
-LEFT JOIN loyalty_points lp ON lp.customer_id = c.customer_id
-WHERE c.status = 'ACTIVE'
-GROUP BY
-    c.customer_id, c.full_name, c.email,
-    c.created_date, lp.tier;
 
