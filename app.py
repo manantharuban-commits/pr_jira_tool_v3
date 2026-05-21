@@ -351,7 +351,7 @@ BUILTIN_FIELDS = [
 DEFAULT_CONFIG = {
     "github_token_file":   os.path.join(BASE_DIR, "github_token.txt"),
     "jira_token_file":     os.path.join(BASE_DIR, "jira_token.txt"),
-    "jira_base_url":       "https://yourcompany.atlassian.net",
+    "jira_base_url":       "https://yourcompany.atlassian.net/rest/api/3",
     "jira_project_key":    "PROJ",
     "jira_email":          "you@company.com",
     "github_owner":        "",
@@ -361,6 +361,7 @@ DEFAULT_CONFIG = {
     "ssl_cert_file":       os.path.join(BASE_DIR, "certs", "dummy.pem"),
     "jira_ssl_cert_file":  os.path.join(BASE_DIR, "certs", "jira_dummy.pem"),
     "jira_ssl_verify":     True,
+    "github_ssl_verify":   True,
     "fields":              BUILTIN_FIELDS,
     "field_defaults":      {},   # key → default_value overrides
     "theme":               "dark",
@@ -421,8 +422,11 @@ def jira_auth_headers(email, token):
             "Content-Type": "application/json", "Accept": "application/json"}
 
 def _ssl_verify(cfg):
-    """GitHub SSL cert. Returns cert path or True."""
-    p = (cfg or {}).get("ssl_cert_file", "")
+    """GitHub SSL. Returns False (skip), cert path, or True (system CA)."""
+    cfg = cfg or {}
+    if not cfg.get("github_ssl_verify", True):
+        return False
+    p = cfg.get("ssl_cert_file", "")
     if p and os.path.isfile(p):
         return p
     return True
@@ -4708,7 +4712,7 @@ class App(tk.Tk):
             ("GitHub Repo",               "github_repo",         "⎇"),
             ("GitHub SSL Certificate",    "ssl_cert_file",       "⎇"),
             ("Jira Token File",           "jira_token_file",     "⊡"),
-            ("Jira Base URL",             "jira_base_url",       "≋"),
+            ("Jira API URL",              "jira_base_url",       "≋"),
             ("Jira Project Key",          "jira_project_key",    "⊡"),
             ("Jira Email",                "jira_email",          "≋"),
             ("Jira SSL Certificate",      "jira_ssl_cert_file",  "⊡"),
@@ -4763,29 +4767,49 @@ class App(tk.Tk):
         tk.Label(chk_inner, text="Open generated .docx automatically after saving",
                  bg=chk_row_bg, fg=C["muted"], font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
 
-        # ── Jira SSL verify toggle ────────────────────────────────────────────
-        ssl_row_bg = C["bg"] if len(defs) % 2 == 0 else C["card"]
-        ssl_row = tk.Frame(sf, bg=ssl_row_bg)
-        ssl_row.pack(fill="x", padx=16, pady=0)
-        ssl_inner = tk.Frame(ssl_row, bg=ssl_row_bg)
-        ssl_inner.pack(fill="x", padx=6, pady=5)
-        ssl_lbl_f = tk.Frame(ssl_inner, bg=ssl_row_bg)
-        ssl_lbl_f.pack(side="left")
-        tk.Label(ssl_lbl_f, text="⊡", bg=ssl_row_bg, fg=C["red"],
-                 font=("Segoe UI", 9), width=2).pack(side="left")
-        tk.Label(ssl_lbl_f, text="Jira SSL Verification", bg=ssl_row_bg, fg=C["muted"],
-                 width=22, anchor="w", font=("Segoe UI", 9)).pack(side="left")
-        jira_ssl_var = tk.BooleanVar(value=bool(self.config_data.get("jira_ssl_verify", True)))
-        ttk.Checkbutton(ssl_inner, variable=jira_ssl_var).pack(side="left")
-        tk.Label(ssl_inner,
-                 text="Uncheck to skip SSL verification (use for self-signed / internal CA certs)",
-                 bg=ssl_row_bg, fg=C["muted"], font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
+        # ── SSL verify toggles (GitHub + Jira) ───────────────────────────────
+        def _make_ssl_toggle(parent_frame, label, icon, cfg_key, default=True):
+            n = len([w for w in parent_frame.winfo_children()])
+            row_bg = C["card"] if n % 2 == 0 else C["bg"]
+            row = tk.Frame(parent_frame, bg=row_bg)
+            row.pack(fill="x", padx=16, pady=0)
+            inner = tk.Frame(row, bg=row_bg)
+            inner.pack(fill="x", padx=6, pady=5)
+            lf = tk.Frame(inner, bg=row_bg)
+            lf.pack(side="left")
+            tk.Label(lf, text=icon, bg=row_bg, fg=C["accent"],
+                     font=("Segoe UI", 9), width=2).pack(side="left")
+            tk.Label(lf, text=label, bg=row_bg, fg=C["muted"],
+                     width=22, anchor="w", font=("Segoe UI", 9)).pack(side="left")
+            var = tk.BooleanVar(value=bool(self.config_data.get(cfg_key, default)))
+
+            def _refresh(btn, v):
+                if v.get():
+                    btn.configure(text="✓  Enabled", bg=C["green"],  fg="#000000")
+                else:
+                    btn.configure(text="✗  Disabled", bg=C["red"], fg="#ffffff")
+
+            btn = tk.Button(inner, font=("Segoe UI", 9, "bold"),
+                            relief="flat", padx=10, pady=3, cursor="hand2")
+            btn.configure(command=lambda: [var.set(not var.get()), _refresh(btn, var)])
+            _refresh(btn, var)
+            btn.pack(side="left")
+            tk.Label(inner, text="SSL certificate verification",
+                     bg=row_bg, fg=C["muted"],
+                     font=("Segoe UI", 8)).pack(side="left", padx=(10, 0))
+            return var
+
+        gh_ssl_var   = _make_ssl_toggle(sf, "GitHub SSL Verify", "⎇",
+                                        "github_ssl_verify", default=True)
+        jira_ssl_var = _make_ssl_toggle(sf, "Jira SSL Verify",   "⊡",
+                                        "jira_ssl_verify",   default=True)
 
         def _save():
             for k, v2 in vars_.items():
                 self.config_data[k] = v2.get()
-            self.config_data["auto_open_word_doc"] = auto_open_var.get()
-            self.config_data["jira_ssl_verify"]    = jira_ssl_var.get()
+            self.config_data["auto_open_word_doc"]  = auto_open_var.get()
+            self.config_data["github_ssl_verify"]   = gh_ssl_var.get()
+            self.config_data["jira_ssl_verify"]     = jira_ssl_var.get()
             save_config(self.config_data)
             self._set_status("Settings saved")
             win.destroy()
@@ -4847,10 +4871,11 @@ class App(tk.Tk):
 
         # ── [TEST] Jira connection test button ────────────────────────────────
         def _test_jira():
-            # snapshot current field values before save
             snap = dict(self.config_data)
             for k, v2 in vars_.items():
                 snap[k] = v2.get()
+            snap["jira_ssl_verify"]   = jira_ssl_var.get()
+            snap["github_ssl_verify"] = gh_ssl_var.get()
             self._test_jira_connection(parent=win, cfg=snap)
 
         tk.Button(br, text="⚡  Test Jira",
@@ -4884,7 +4909,7 @@ class App(tk.Tk):
             params = {"jql": jql, "maxResults": 20,
                       "fields": "summary,status,issuetype,created,key"}
             try:
-                r = requests.get(f"{base_url}/rest/api/3/search",
+                r = requests.get(f"{base_url}/search",
                                  headers=hdrs, params=params,
                                  timeout=15, verify=verify)
                 r.raise_for_status()
@@ -5768,7 +5793,7 @@ class App(tk.Tk):
         hdrs   = jira_auth_headers(email, jira_tok)
         verify = _jira_ssl_verify(self.config_data)
         try:
-            resp = requests.post(f"{base_url}/rest/api/3/issue",
+            resp = requests.post(f"{base_url}/issue",
                                  json=payload, headers=hdrs, timeout=20, verify=verify)
             resp.raise_for_status()
             data = resp.json()
@@ -5814,7 +5839,7 @@ class App(tk.Tk):
                 ah.pop("Content-Type", None)
                 with open(path, "rb") as fh:
                     requests.post(
-                        f"{base_url}/rest/api/3/issue/{issue_key}/attachments",
+                        f"{base_url}/issue/{issue_key}/attachments",
                         headers=ah,
                         files={"file": (os.path.basename(path), fh, mime)},
                         timeout=30, verify=verify)
