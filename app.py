@@ -357,6 +357,7 @@ DEFAULT_CONFIG = {
     "github_api_url":      "https://api.github.com",
     "word_doc_output_dir": BASE_DIR,
     "ssl_cert_file":       os.path.join(BASE_DIR, "certs", "dummy.pem"),
+    "jira_ssl_cert_file":  os.path.join(BASE_DIR, "certs", "jira_dummy.pem"),
     "fields":              BUILTIN_FIELDS,
     "field_defaults":      {},   # key → default_value overrides
     "theme":               "dark",
@@ -417,8 +418,15 @@ def jira_auth_headers(email, token):
             "Content-Type": "application/json", "Accept": "application/json"}
 
 def _ssl_verify(cfg):
-    """Return cert path for requests verify= param. Falls back to True if not set/found."""
+    """GitHub SSL cert. Returns cert path or True."""
     p = (cfg or {}).get("ssl_cert_file", "")
+    if p and os.path.isfile(p):
+        return p
+    return True
+
+def _jira_ssl_verify(cfg):
+    """Jira SSL cert. Returns cert path or True."""
+    p = (cfg or {}).get("jira_ssl_cert_file", "")
     if p and os.path.isfile(p):
         return p
     return True
@@ -4688,16 +4696,17 @@ class App(tk.Tk):
         sf.bind("<Configure>", lambda e: c.configure(scrollregion=c.bbox("all")))
 
         defs = [
-            ("GitHub Token File",   "github_token_file",   "⎇"),
-            ("GitHub API URL",      "github_api_url",      "⎇"),
-            ("Jira Token File",     "jira_token_file",     "⊡"),
-            ("Jira Base URL",       "jira_base_url",       "≋"),
-            ("Jira Project Key",    "jira_project_key",    "⊡"),
-            ("Jira Email",          "jira_email",          "≋"),
-            ("GitHub Owner",        "github_owner",        "⎇"),
-            ("GitHub Repo",         "github_repo",         "⎇"),
-            ("SSL Certificate File","ssl_cert_file",       "⊡"),
-            ("Output Directory",    "word_doc_output_dir", "⊞"),
+            ("GitHub Token File",         "github_token_file",   "⎇"),
+            ("GitHub API URL",            "github_api_url",      "⎇"),
+            ("GitHub Owner",              "github_owner",        "⎇"),
+            ("GitHub Repo",               "github_repo",         "⎇"),
+            ("GitHub SSL Certificate",    "ssl_cert_file",       "⎇"),
+            ("Jira Token File",           "jira_token_file",     "⊡"),
+            ("Jira Base URL",             "jira_base_url",       "≋"),
+            ("Jira Project Key",          "jira_project_key",    "⊡"),
+            ("Jira Email",                "jira_email",          "≋"),
+            ("Jira SSL Certificate",      "jira_ssl_cert_file",  "⊡"),
+            ("Output Directory",          "word_doc_output_dir", "⊞"),
         ]
         vars_ = {}
         for idx, (label, key, icon) in enumerate(defs):
@@ -4717,7 +4726,7 @@ class App(tk.Tk):
             ttk.Entry(inner, textvariable=v2).pack(side="left", fill="x", expand=True)
             if "file" in key or "dir" in key.lower():
                 is_dir = "dir" in key.lower()
-                is_pem = key == "ssl_cert_file"
+                is_pem = key in ("ssl_cert_file", "jira_ssl_cert_file")
                 def _browse(var=v2, d=is_dir, pem=is_pem):
                     if d:
                         p = filedialog.askdirectory()
@@ -4810,6 +4819,148 @@ class App(tk.Tk):
                   font=("Segoe UI", 10), padx=12, pady=6,
                   activebackground=C["border"], cursor="hand2",
                   command=_export_config).pack(side="left")
+
+        # ── [TEST] Jira connection test button ────────────────────────────────
+        def _test_jira():
+            # snapshot current field values before save
+            snap = dict(self.config_data)
+            for k, v2 in vars_.items():
+                snap[k] = v2.get()
+            self._test_jira_connection(parent=win, cfg=snap)
+
+        tk.Button(br, text="⚡  Test Jira",
+                  bg=C["yellow"], fg="#000000", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=12, pady=6,
+                  activebackground=C["orange"], cursor="hand2",
+                  command=_test_jira).pack(side="left", padx=(12, 0))
+
+    # ── [TEST] Jira connection tester ─────────────────────────────────────────
+
+    def _test_jira_connection(self, parent=None, cfg=None):
+        """Fetch up to 20 tickets reported-by current Jira user and show popup."""
+        cfg = cfg or self.config_data
+        parent = parent or self
+
+        tok_file = cfg.get("jira_token_file", "")
+        email    = cfg.get("jira_email", "").strip()
+        base_url = cfg.get("jira_base_url", "").rstrip("/")
+
+        try:
+            jira_tok = read_token(tok_file)
+        except Exception as e:
+            messagebox.showerror("Jira Test — Token Error", str(e), parent=parent)
+            return
+
+        hdrs   = jira_auth_headers(email, jira_tok)
+        verify = _jira_ssl_verify(cfg)
+
+        def _fetch():
+            jql    = f'reporter = currentUser() ORDER BY created DESC'
+            params = {"jql": jql, "maxResults": 20,
+                      "fields": "summary,status,issuetype,created,key"}
+            try:
+                r = requests.get(f"{base_url}/rest/api/3/search",
+                                 headers=hdrs, params=params,
+                                 timeout=15, verify=verify)
+                r.raise_for_status()
+                return r.json(), None
+            except requests.HTTPError as e:
+                return None, f"HTTP {e.response.status_code}: {e.response.text[:300]}"
+            except Exception as e:
+                return None, str(e)
+
+        # run in thread — show "connecting…" popup first
+        popup = tk.Toplevel(parent)
+        popup.title(f"{APP_NAME}  —  Jira Connection Test")
+        popup.geometry("700x520")
+        popup.configure(bg=C["bg"])
+        popup.grab_set()
+
+        tk.Frame(popup, bg=C["accent"], height=3).pack(fill="x")
+        hdr = tk.Frame(popup, bg=C["surface"])
+        hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C["accent"], width=4).pack(side="left", fill="y")
+        hi = tk.Frame(hdr, bg=C["surface"])
+        hi.pack(side="left", padx=14, pady=10)
+        tk.Label(hi, text="⚡  Jira Connection Test",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        tk.Label(hi, text=f"{base_url}  •  {email}",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w")
+        tk.Frame(popup, bg=C["border"], height=1).pack(fill="x")
+
+        status_var = tk.StringVar(value="Connecting…")
+        tk.Label(popup, textvariable=status_var,
+                 bg=C["bg"], fg=C["yellow"],
+                 font=("Segoe UI", 9, "italic")).pack(anchor="w", padx=16, pady=(8, 0))
+
+        # scrollable results frame
+        c2    = tk.Canvas(popup, bg=C["bg"], highlightthickness=0)
+        vsb   = ttk.Scrollbar(popup, orient="vertical", command=c2.yview)
+        c2.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        c2.pack(side="left", fill="both", expand=True)
+        sf2   = tk.Frame(c2, bg=C["bg"])
+        wid2  = c2.create_window((0, 0), window=sf2, anchor="nw")
+        c2.bind("<Configure>", lambda e: c2.itemconfig(wid2, width=e.width))
+        sf2.bind("<Configure>", lambda e: c2.configure(scrollregion=c2.bbox("all")))
+
+        def _populate(data, err):
+            if err:
+                status_var.set(f"Connection FAILED")
+                tk.Label(sf2, text=err, bg=C["bg"], fg=C["red"],
+                         font=("Segoe UI", 9), wraplength=620,
+                         justify="left").pack(anchor="w", padx=16, pady=8)
+                return
+
+            issues = data.get("issues", [])
+            total  = data.get("total", 0)
+            status_var.set(f"Connected  ✓   Showing {len(issues)} of {total} tickets reported by you")
+
+            if not issues:
+                tk.Label(sf2, text="No tickets found.", bg=C["bg"], fg=C["muted"],
+                         font=("Segoe UI", 9)).pack(anchor="w", padx=16, pady=8)
+                return
+
+            # header row
+            hrow = tk.Frame(sf2, bg=C["card2"])
+            hrow.pack(fill="x", padx=12, pady=(8, 2))
+            for txt, w in [("Key", 12), ("Type", 10), ("Status", 14), ("Created", 12), ("Summary", 42)]:
+                tk.Label(hrow, text=txt, bg=C["card2"], fg=C["muted"],
+                         font=("Segoe UI", 8, "bold"), width=w, anchor="w").pack(side="left", padx=4)
+
+            for i, iss in enumerate(issues):
+                f  = iss.get("fields", {})
+                row_bg = C["card"] if i % 2 == 0 else C["bg"]
+                row = tk.Frame(sf2, bg=row_bg, cursor="hand2")
+                row.pack(fill="x", padx=12, pady=1)
+                key     = iss.get("key", "")
+                itype   = (f.get("issuetype") or {}).get("name", "")
+                status  = (f.get("status")    or {}).get("name", "")
+                created = (f.get("created")   or "")[:10]
+                summary = f.get("summary", "")
+
+                url = f"{base_url}/browse/{key}"
+                for txt, w, col in [
+                    (key,     12, C["accent"]),
+                    (itype,   10, C["purple"]),
+                    (status,  14, C["green"]),
+                    (created, 12, C["muted"]),
+                    (summary, 42, C["text"]),
+                ]:
+                    lbl = tk.Label(row, text=txt, bg=row_bg, fg=col,
+                                   font=("Segoe UI", 9), width=w, anchor="w")
+                    lbl.pack(side="left", padx=4, pady=3)
+                    lbl.bind("<Button-1>", lambda e, u=url: webbrowser.open(u))
+                    lbl.bind("<Enter>",    lambda e, r2=row, b=row_bg: r2.configure(bg=C["accent_dim"]))
+                    lbl.bind("<Leave>",    lambda e, r2=row, b=row_bg: r2.configure(bg=b))
+
+        def _thread():
+            data, err = _fetch()
+            popup.after(0, lambda: _populate(data, err))
+
+        threading.Thread(target=_thread, daemon=True).start()
 
     # ── Field managers ────────────────────────────────────────────────────────
 
@@ -5590,7 +5741,7 @@ class App(tk.Tk):
                 payload["fields"][jk] = val
 
         hdrs   = jira_auth_headers(email, jira_tok)
-        verify = _ssl_verify(self.config_data)
+        verify = _jira_ssl_verify(self.config_data)
         try:
             resp = requests.post(f"{base_url}/rest/api/3/issue",
                                  json=payload, headers=hdrs, timeout=20, verify=verify)
