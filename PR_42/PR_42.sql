@@ -1,11 +1,11 @@
 -- ====================================================================
 -- PR #42: feat: inventory & order management SQL overhaul
--- Generated : 2026-05-21 10:32:05
+-- Generated : 2026-05-29 20:37:15
 -- Files     : 3
 -- ====================================================================
 
 -- --------------------------------------------------------------------
--- Step 1: v_customer_summary
+-- Step 1: reviewer_bob: GROUP BY clause updated correctly — approved.
 -- File  : db/views/v_customer_summary.sql
 -- Status: MODIFIED  (+3 / -2)
 -- --------------------------------------------------------------------
@@ -28,7 +28,7 @@ GROUP BY
 
 
 -- --------------------------------------------------------------------
--- Step 2: orders
+-- Step 2: reviewer_carol: order_status_history insert is missing an index on order_id — raise a follow-up ticket.
 -- File  : db/procedures/sp_update_order_status.sql
 -- Status: MODIFIED  (+18 / -8)
 -- --------------------------------------------------------------------
@@ -76,7 +76,7 @@ END sp_update_order_status;
 
 
 -- --------------------------------------------------------------------
--- Step 3: PACKAGE pkg_inventory_mgmt
+-- Step 3: reviewer_bob: Package spec looks clean. Confirm reserve_stock handles concurrent transactions via SELECT FOR UPDATE.
 -- File  : db/packages/pkg_inventory_mgmt.sql
 -- Status: ADDED  (+72 / -0)
 -- --------------------------------------------------------------------

@@ -32,7 +32,9 @@ from docx.oxml import OxmlElement
 #  Paths & palette
 # ─────────────────────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+CONFIG_FILE        = os.path.join(BASE_DIR, "config.json")
+FIELD_VALUES_FILE  = os.path.join(BASE_DIR, "field_values.json")
+KEYWORDS_FILE      = os.path.join(BASE_DIR, "keywords.json")
 
 APP_NAME     = "PRism"
 APP_SUBTITLE = "PR  →  Jira · Doc · SQL"
@@ -276,21 +278,21 @@ BUILTIN_FIELDS = [
     {"label": "Reporter",          "key": "reporter",       "type": "text",
      "choices": [], "default": "", "jira_key": "reporter",           "jira_field": True,
      "required": False, "enabled": True,  "show_label_in_jira": False},
-    # ── Additional Jira API fields (disabled — enable via Jira Fields button) ──
+    # ── Additional Jira API fields (disabled by default — enable via ⊞ Jira Fields button) ──
     {"label": "Assignee",          "key": "assignee",       "type": "text",
      "choices": [], "default": "", "jira_key": "assignee",           "jira_field": True,
-     "required": False, "enabled": False, "show_label_in_jira": False},
-    {"label": "Priority (API)",    "key": "jira_priority",  "type": "dropdown",
+     "required": False, "enabled": True,  "show_label_in_jira": False},
+    {"label": "Priority",          "key": "jira_priority",  "type": "dropdown",
      "choices": ["Highest","High","Medium","Low","Lowest"],
      "default": "Medium",           "jira_key": "priority",          "jira_field": True,
      "required": False, "enabled": False, "show_label_in_jira": False},
     {"label": "Labels",            "key": "labels",         "type": "text",
      "choices": [], "default": "", "jira_key": "labels",             "jira_field": True,
      "required": False, "enabled": False, "show_label_in_jira": False},
-    {"label": "Components (API)",  "key": "jira_components","type": "text",
+    {"label": "Components",        "key": "jira_components","type": "text",
      "choices": [], "default": "", "jira_key": "components",         "jira_field": True,
      "required": False, "enabled": False, "show_label_in_jira": False},
-    {"label": "Fix Versions (API)","key": "jira_fix_versions","type": "text",
+    {"label": "Fix Versions",      "key": "jira_fix_versions","type": "text",
      "choices": [], "default": "", "jira_key": "fixVersions",        "jira_field": True,
      "required": False, "enabled": False, "show_label_in_jira": False},
     {"label": "Affects Versions",  "key": "aff_versions",   "type": "text",
@@ -299,7 +301,7 @@ BUILTIN_FIELDS = [
     {"label": "Due Date",          "key": "due_date",       "type": "date",
      "choices": [], "default": "", "jira_key": "duedate",            "jira_field": True,
      "required": False, "enabled": False, "show_label_in_jira": False},
-    {"label": "Environment (API)", "key": "jira_env",       "type": "text",
+    {"label": "Environment",       "key": "jira_env",       "type": "text",
      "choices": [], "default": "", "jira_key": "environment",        "jira_field": True,
      "required": False, "enabled": False, "show_label_in_jira": False},
     {"label": "Epic Link",         "key": "epic_link",      "type": "text",
@@ -323,7 +325,7 @@ BUILTIN_FIELDS = [
     {"label": "Watchers",          "key": "watchers",       "type": "text",
      "choices": [], "default": "", "jira_key": "watches",            "jira_field": True,
      "required": False, "enabled": False, "show_label_in_jira": False},
-    # ── Description-only fields (appear in Jira ticket body, not as top-level fields) ──
+    # ── Description-only fields (appear in Jira ticket body as a table, not as top-level API fields) ──
     {"label": "Dependency",   "key": "dependency",  "type": "text",
      "choices": [], "default": "", "jira_key": "dependency",
      "required": False, "enabled": True, "show_label_in_jira": True},
@@ -361,13 +363,14 @@ DEFAULT_CONFIG = {
     "ssl_cert_file":       os.path.join(BASE_DIR, "certs", "dummy.pem"),
     "jira_ssl_cert_file":  os.path.join(BASE_DIR, "certs", "jira_dummy.pem"),
     "jira_ssl_verify":     True,
+    "jira_auth_method":    "basic",
     "github_ssl_verify":   True,
     "fields":              BUILTIN_FIELDS,
     "field_defaults":      {},   # key → default_value overrides
     "theme":               "dark",
-    "recent_tickets":      [],   # last 10 created Jira tickets
-    "field_presets":       {},   # name → {key: value} maps
     "auto_open_word_doc":  False,
+    "attach_word_doc":     True,
+    "attach_sql_file":     True,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -402,6 +405,40 @@ def save_config(cfg):
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=2)
 
+def load_field_values():
+    if os.path.exists(FIELD_VALUES_FILE):
+        try:
+            with open(FIELD_VALUES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_field_values(values):
+    try:
+        with open(FIELD_VALUES_FILE, "w", encoding="utf-8") as f:
+            json.dump(values, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+def load_keywords():
+    if os.path.exists(KEYWORDS_FILE):
+        try:
+            with open(KEYWORDS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+    return ["work_prod"]
+
+def save_keywords(kws):
+    try:
+        with open(KEYWORDS_FILE, "w", encoding="utf-8") as f:
+            json.dump(kws, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
 def read_token(path):
     path = os.path.expanduser(path)
     if not os.path.exists(path):
@@ -416,7 +453,10 @@ def gh_headers(token):
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-def jira_auth_headers(email, token):
+def jira_auth_headers(email, token, method="basic"):
+    if method in ("bearer", "oauth"):
+        return {"Authorization": f"Bearer {token}",
+                "Content-Type": "application/json", "Accept": "application/json"}
     creds = base64.b64encode(f"{email}:{token}".encode()).decode()
     return {"Authorization": f"Basic {creds}",
             "Content-Type": "application/json", "Accept": "application/json"}
@@ -704,7 +744,8 @@ def _word_diff_block(doc, patch, status, adds, dels):
 #  Word document generator
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_word_doc(field_values, field_defs, pr_data, file_comments, output_dir):
+def generate_word_doc(field_values, field_defs, pr_data, file_comments, output_dir,
+                      keyword_findings=None):
     # ── Colour palette ────────────────────────────────────────────────────────
     C_PRIMARY   = RGBColor(0x1F, 0x38, 0x64)   # Deep Navy
     C_SECONDARY = RGBColor(0x2E, 0x75, 0xB6)   # Steel Blue
@@ -982,6 +1023,51 @@ def generate_word_doc(field_values, field_defs, pr_data, file_comments, output_d
             div = doc.add_paragraph("")
             div.paragraph_format.space_before = Pt(10); div.paragraph_format.space_after = Pt(2)
             _bottom_border(div, color=HEX_RULE, sz="4")
+
+    # ── Keyword Findings / Testing Scenarios ─────────────────────────────────
+    if keyword_findings:
+        HEX_ALERT  = "FFF3CD"
+        HEX_ALERT2 = "FFECB3"
+        _h1("⚠  Keyword Findings — Testing Scenarios")
+        warn_p = doc.add_paragraph()
+        warn_p.paragraph_format.left_indent  = Cm(0.3)
+        warn_p.paragraph_format.space_before = Pt(0)
+        warn_p.paragraph_format.space_after  = Pt(8)
+        rw = warn_p.add_run(
+            "The following SQL keywords were flagged during generation. "
+            "Verify that each occurrence is intentional and confirm test coverage.")
+        rw.font.size = Pt(10); rw.italic = True
+        rw.font.color.rgb = RGBColor(0x7c, 0x4a, 0x00)
+
+        tbl = doc.add_table(rows=1, cols=3)
+        tbl.style = "Table Grid"
+        for ci, hdr_txt in enumerate(["File", "Keywords Found", "Test Notes"]):
+            cell = tbl.rows[0].cells[ci]
+            cell.text = hdr_txt
+            _shade_cell(cell, HEX_PRIMARY)
+            for p in cell.paragraphs:
+                if p.runs:
+                    p.runs[0].font.color.rgb = C_WHITE
+                    p.runs[0].bold = True
+                    p.runs[0].font.size = Pt(10)
+        for ri, (fn, kws) in enumerate(keyword_findings.items()):
+            row = tbl.add_row()
+            bg = HEX_ALERT if ri % 2 == 0 else HEX_ALERT2
+            row.cells[0].text = fn
+            row.cells[1].text = ", ".join(kws)
+            row.cells[2].text = ""
+            for cell in row.cells:
+                _shade_cell(cell, bg)
+            for p in row.cells[0].paragraphs:
+                if p.runs:
+                    p.runs[0].font.name = "Consolas"
+                    p.runs[0].font.size = Pt(9)
+                    p.runs[0].font.color.rgb = RGBColor(0x7c, 0x4a, 0x00)
+            for p in row.cells[1].paragraphs:
+                if p.runs:
+                    p.runs[0].bold = True
+                    p.runs[0].font.size = Pt(10)
+                    p.runs[0].font.color.rgb = RGBColor(0xcf, 0x22, 0x2e)
 
     doc_name = field_values.get("doc_name") or \
                f"Issue_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1947,14 +2033,15 @@ class FieldToggleDialog(tk.Toplevel):
     """
     Popup showing a filtered list of fields with enable/disable checkboxes.
     filter_fn: callable(fd) → bool to select which fields to display.
+    Supports adding custom Jira API fields.
     Returns updated fields list via .result after apply.
     """
 
     def __init__(self, parent, fields, title, subtitle, filter_fn, accent_color=None):
         super().__init__(parent)
         self.title(f"{APP_NAME}  —  {title}")
-        self.geometry("520x560")
-        self.minsize(440, 380)
+        self.geometry("560x600")
+        self.minsize(460, 400)
         self.configure(bg=C["bg"])
         self.grab_set()
         self.transient(parent)
@@ -1964,6 +2051,8 @@ class FieldToggleDialog(tk.Toplevel):
         self._accent     = accent_color or C["accent"]
         self.result      = None
         self._vars       = {}
+        self._canvas     = None
+        self._list_frame = None
 
         self._build(title, subtitle)
 
@@ -1993,25 +2082,57 @@ class FieldToggleDialog(tk.Toplevel):
         # scrollable list
         outer = tk.Frame(self, bg=C["bg"])
         outer.pack(fill="both", expand=True)
-        canvas = tk.Canvas(outer, bg=C["bg"], highlightthickness=0)
-        vbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=vbar.set)
+        self._canvas = tk.Canvas(outer, bg=C["bg"], highlightthickness=0)
+        vbar = ttk.Scrollbar(outer, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vbar.set)
         vbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        list_frame = tk.Frame(canvas, bg=C["bg"])
-        win = canvas.create_window((0, 0), window=list_frame, anchor="nw")
-        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
-        list_frame.bind("<Configure>",
-                        lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<MouseWheel>",
-                    lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+        self._canvas.pack(side="left", fill="both", expand=True)
+        self._list_frame = tk.Frame(self._canvas, bg=C["bg"])
+        win = self._canvas.create_window((0, 0), window=self._list_frame, anchor="nw")
+        self._canvas.bind("<Configure>", lambda e: self._canvas.itemconfig(win, width=e.width))
+        self._list_frame.bind("<Configure>",
+                              lambda e: self._canvas.configure(
+                                  scrollregion=self._canvas.bbox("all")))
+        self._canvas.bind("<MouseWheel>",
+                          lambda e: self._canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        self._render_rows()
+
+        # bottom bar
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
+        bot = tk.Frame(self, bg=C["surface"])
+        bot.pack(fill="x", side="bottom")
+        inner_bot = tk.Frame(bot, bg=C["surface"])
+        inner_bot.pack(fill="x", padx=14, pady=10)
+
+        tk.Button(inner_bot, text="⊕  Add Custom Jira Field",
+                  bg=C["accent_dim"], fg=C["accent"], relief="flat",
+                  font=("Segoe UI", 9, "bold"), padx=12, pady=6,
+                  activebackground=C["border"], cursor="hand2",
+                  command=self._add_custom_jira_field).pack(side="left")
+
+        tk.Button(inner_bot, text="✦  Apply & Close",
+                  bg=C["green"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10, "bold"), padx=16, pady=6,
+                  activebackground="#2ea043", cursor="hand2",
+                  command=self._apply).pack(side="right")
+        tk.Button(inner_bot, text="✕  Cancel",
+                  bg=C["red"], fg="#ffffff", relief="flat",
+                  font=("Segoe UI", 10), padx=12, pady=6,
+                  activebackground="#c0392b", cursor="hand2",
+                  command=self.destroy).pack(side="right", padx=(0, 8))
+
+    def _render_rows(self):
+        for w in self._list_frame.winfo_children():
+            w.destroy()
+        self._vars = {}
 
         filtered = [fd for fd in self._all_fields if self._filter_fn(fd)]
         for i, fd in enumerate(filtered):
             bg  = C["card"] if i % 2 == 0 else C["surface"]
             req = fd.get("required", False)
 
-            row = tk.Frame(list_frame, bg=bg)
+            row = tk.Frame(self._list_frame, bg=bg)
             row.pack(fill="x")
 
             en_var = tk.BooleanVar(value=fd.get("enabled", True))
@@ -2033,30 +2154,131 @@ class FieldToggleDialog(tk.Toplevel):
                 tk.Label(row, text="req", bg=bg, fg=C["purple"],
                          font=("Segoe UI", 7, "italic")).pack(side="right", padx=(4, 2), pady=8)
 
+            if fd.get("custom") and not req:
+                def _del(fd=fd):
+                    if messagebox.askyesno("Remove", f'Remove "{fd["label"]}"?', parent=self):
+                        self._all_fields.remove(fd)
+                        self._render_rows()
+                tk.Button(row, text="✕", bg=bg, fg=C["red"], relief="flat",
+                          font=("Segoe UI", 9), padx=4,
+                          activebackground=C["border"], cursor="hand2",
+                          command=_del).pack(side="right", padx=(2, 6), pady=4)
+
             jk = fd.get("jira_key", "") or ""
             tk.Label(row, text=jk, bg=bg, fg=C["muted"],
                      font=("Segoe UI", 8, "italic"),
                      anchor="e", padx=12).pack(side="right", pady=8)
 
-            tk.Frame(list_frame, bg=C["border"], height=1).pack(fill="x")
+            tk.Frame(self._list_frame, bg=C["border"], height=1).pack(fill="x")
 
-        # bottom bar
-        tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
-        bot = tk.Frame(self, bg=C["surface"])
-        bot.pack(fill="x", side="bottom")
-        inner_bot = tk.Frame(bot, bg=C["surface"])
-        inner_bot.pack(fill="x", padx=14, pady=10)
+    def _add_custom_jira_field(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("Add Custom Jira Field")
+        dlg.geometry("480x340")
+        dlg.configure(bg=C["bg"])
+        dlg.grab_set()
+        dlg.transient(self)
 
-        tk.Button(inner_bot, text="✦  Apply & Close",
+        tk.Frame(dlg, bg=C["accent"], height=3).pack(fill="x")
+        hdr = tk.Frame(dlg, bg=C["surface"]); hdr.pack(fill="x")
+        tk.Frame(hdr, bg=C["accent"], width=4).pack(side="left", fill="y")
+        hdr_inner = tk.Frame(hdr, bg=C["surface"])
+        hdr_inner.pack(side="left", padx=12, pady=10)
+        tk.Label(hdr_inner, text="⊕  New Custom Jira API Field",
+                 bg=C["surface"], fg=C["text"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        tk.Label(hdr_inner, text="Field sent directly to the Jira API when creating a ticket",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x")
+
+        def _row(label, idx):
+            row_bg = C["card"] if idx % 2 == 0 else C["bg"]
+            f = tk.Frame(dlg, bg=row_bg); f.pack(fill="x", padx=14, pady=0)
+            inner = tk.Frame(f, bg=row_bg); inner.pack(fill="x", padx=6, pady=6)
+            tk.Label(inner, text=label, bg=row_bg, fg=C["muted"],
+                     width=18, anchor="w", font=("Segoe UI", 9)).pack(side="left")
+            return inner
+
+        lbl_var = tk.StringVar()
+        f1 = _row("Field Label *", 0)
+        ttk.Entry(f1, textvariable=lbl_var, width=28).pack(side="left", fill="x", expand=True)
+
+        jira_key_var = tk.StringVar()
+        f2 = _row("Jira API Key *", 1)
+        ttk.Entry(f2, textvariable=jira_key_var, width=28).pack(side="left", fill="x", expand=True)
+        tk.Label(f2, text="e.g. assignee, customfield_10001",
+                 bg=C["bg"], fg=C["muted"], font=("Segoe UI", 7)).pack(side="left", padx=6)
+
+        type_var = tk.StringVar(value="text")
+        f3 = _row("Field Type", 2)
+        ttk.Combobox(f3, textvariable=type_var,
+                     values=["text", "dropdown", "number", "date"],
+                     state="readonly", width=14).pack(side="left")
+
+        def_var = tk.StringVar()
+        f4 = _row("Default Value", 3)
+        ttk.Entry(f4, textvariable=def_var, width=28).pack(side="left", fill="x", expand=True)
+
+        choices_var = tk.StringVar()
+        f5 = _row("Choices (csv)", 4)
+        choices_entry = ttk.Entry(f5, textvariable=choices_var, width=28)
+
+        def _on_type(*_):
+            if type_var.get() == "dropdown":
+                choices_entry.pack(side="left")
+            else:
+                choices_entry.pack_forget()
+        type_var.trace_add("write", _on_type)
+
+        def _create():
+            label = lbl_var.get().strip()
+            jk    = jira_key_var.get().strip()
+            if not label:
+                messagebox.showwarning("Required", "Field Label is required.", parent=dlg)
+                return
+            if not jk:
+                messagebox.showwarning("Required", "Jira API Key is required.", parent=dlg)
+                return
+            key = re.sub(r'\W+', '_', label.lower()).strip('_') + "_jira_custom"
+            existing_keys = {fd["key"] for fd in self._all_fields}
+            if key in existing_keys:
+                key = key + "_2"
+            choices = [c.strip() for c in choices_var.get().split(",") if c.strip()] \
+                      if type_var.get() == "dropdown" else []
+            new_fd = dict(
+                label             = label,
+                key               = key,
+                type              = type_var.get(),
+                choices           = choices,
+                default           = def_var.get().strip(),
+                jira_key          = jk,
+                jira_field        = True,
+                show_label_in_jira= False,
+                required          = False,
+                enabled           = True,
+                custom            = True,
+            )
+            # insert after last jira_field entry
+            last_jira_idx = max(
+                (i for i, fd in enumerate(self._all_fields) if fd.get("jira_field")),
+                default=-1)
+            self._all_fields.insert(last_jira_idx + 1, new_fd)
+            self._render_rows()
+            dlg.destroy()
+
+        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x")
+        brow = tk.Frame(dlg, bg=C["surface"]); brow.pack(fill="x", padx=16, pady=12)
+        tk.Button(brow, text="⊕  Add Field",
                   bg=C["green"], fg="#ffffff", relief="flat",
-                  font=("Segoe UI", 10, "bold"), padx=16, pady=6,
-                  activebackground="#2ea043", cursor="hand2",
-                  command=self._apply).pack(side="right")
-        tk.Button(inner_bot, text="✕  Cancel",
+                  font=("Segoe UI", 10, "bold"), padx=14, pady=6,
+                  cursor="hand2", activebackground="#2ea043",
+                  command=_create).pack(side="right")
+        tk.Button(brow, text="✕  Cancel",
                   bg=C["red"], fg="#ffffff", relief="flat",
                   font=("Segoe UI", 10), padx=12, pady=6,
                   activebackground="#c0392b", cursor="hand2",
-                  command=self.destroy).pack(side="right", padx=(0, 8))
+                  command=dlg.destroy).pack(side="right", padx=(0, 8))
 
     def _apply(self):
         for fd in self._all_fields:
@@ -2920,7 +3142,7 @@ class FileChangesPopup(tk.Toplevel):
 
 class SqlFilePopup(tk.Toplevel):
 
-    def __init__(self, parent, files, pr_data, config_data):
+    def __init__(self, parent, files, pr_data, config_data, file_comments=None):
         super().__init__(parent)
         self.title(f"{APP_NAME}  —  SQL File Generator")
         self.geometry("1020x700")
@@ -2934,6 +3156,11 @@ class SqlFilePopup(tk.Toplevel):
         self._cfg     = config_data
         self._rows    = []
         self._result  = None
+        # lookup: filename → latest GitHub review comment
+        self._gh_comments = {
+            fc["filename"]: (fc.get("jira_comment") or fc.get("comment", "")).strip()
+            for fc in (file_comments or [])
+        }
 
         pr_num = pr_data.get("number", "combined")
         out_dir = config_data.get("word_doc_output_dir", BASE_DIR)
@@ -2978,7 +3205,14 @@ class SqlFilePopup(tk.Toplevel):
 
         tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
 
-        wrap = tk.Frame(self, bg=C["bg"]); wrap.pack(fill="both", expand=True)
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True)
+
+        # ── Tab 1 : Files ─────────────────────────────────────────────────────
+        files_tab = tk.Frame(nb, bg=C["bg"])
+        nb.add(files_tab, text="  📄  Files  ")
+
+        wrap = tk.Frame(files_tab, bg=C["bg"]); wrap.pack(fill="both", expand=True)
         self._canvas = tk.Canvas(wrap, bg=C["bg"], highlightthickness=0)
         vsb = ttk.Scrollbar(wrap, orient="vertical", command=self._canvas.yview)
         self._canvas.configure(yscrollcommand=vsb.set)
@@ -2996,6 +3230,11 @@ class SqlFilePopup(tk.Toplevel):
                               int(-1*(e.delta/120)), "units"))
 
         self._build_rows()
+
+        # ── Tab 2 : Keywords ──────────────────────────────────────────────────
+        kw_tab = tk.Frame(nb, bg=C["bg"])
+        nb.add(kw_tab, text="  🔑  Keywords  ")
+        self._build_keywords_tab(kw_tab)
 
         tk.Frame(self, bg=C["border"], height=1).pack(fill="x")
 
@@ -3035,12 +3274,14 @@ class SqlFilePopup(tk.Toplevel):
             dels     = f.get("deletions", 0)
             patch    = f.get("patch", "")
             obj_name = _detect_sql_object(fname, patch)
+            gh_cmt   = self._gh_comments.get(fname, "")
+            cmt_default = gh_cmt if gh_cmt else obj_name
             self._rows.append(dict(
                 filename=fname, status=status,
                 additions=adds, deletions=dels,
                 patch=patch, obj_name=obj_name,
                 inc=tk.BooleanVar(value=(status != "removed")),
-                cmt_var=tk.StringVar(value=obj_name),
+                cmt_var=tk.StringVar(value=cmt_default),
                 raw_url=f.get("raw_url", ""),
                 contents_url=f.get("contents_url", ""),
                 full_content=f.get("full_content"),
@@ -3160,6 +3401,67 @@ class SqlFilePopup(tk.Toplevel):
                           command=lambda u=gh_url: webbrowser.open(u)
                           ).pack(side="right")
 
+    def _build_keywords_tab(self, parent):
+        tk.Frame(parent, bg=C["yellow"], height=3).pack(fill="x")
+        hf = tk.Frame(parent, bg=C["surface"]); hf.pack(fill="x", padx=14, pady=10)
+        tk.Label(hf, text="🔑  Keyword Alerts",
+                 bg=C["surface"], fg=C["yellow"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        tk.Label(hf, text="SQL file generation is BLOCKED if any keyword is found in file content."
+                          "  Remove or fix the match before generating.",
+                 bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+        tk.Frame(parent, bg=C["border"], height=1).pack(fill="x")
+
+        list_frame = tk.Frame(parent, bg=C["bg"]); list_frame.pack(fill="both", expand=True, padx=12, pady=8)
+
+        self._kw_listbox = tk.Listbox(list_frame, bg=C["card"], fg=C["text"],
+                                      selectbackground=C["accent"], selectforeground="#fff",
+                                      font=("Consolas", 10), relief="flat",
+                                      highlightthickness=1, highlightcolor=C["border"],
+                                      highlightbackground=C["border"])
+        kw_sb = ttk.Scrollbar(list_frame, orient="vertical",
+                              command=self._kw_listbox.yview)
+        self._kw_listbox.configure(yscrollcommand=kw_sb.set)
+        kw_sb.pack(side="right", fill="y")
+        self._kw_listbox.pack(side="left", fill="both", expand=True)
+
+        for kw in load_keywords():
+            self._kw_listbox.insert("end", kw)
+
+        tk.Frame(parent, bg=C["border"], height=1).pack(fill="x")
+        ctrl = tk.Frame(parent, bg=C["surface"]); ctrl.pack(fill="x", padx=12, pady=8)
+
+        self._kw_entry_var = tk.StringVar()
+        kw_entry = ttk.Entry(ctrl, textvariable=self._kw_entry_var, width=24)
+        kw_entry.pack(side="left", padx=(0, 6))
+
+        def _add_kw():
+            val = self._kw_entry_var.get().strip()
+            if not val:
+                return
+            existing = list(self._kw_listbox.get(0, "end"))
+            if val.lower() in [e.lower() for e in existing]:
+                return
+            self._kw_listbox.insert("end", val)
+            self._kw_entry_var.set("")
+            save_keywords(list(self._kw_listbox.get(0, "end")))
+
+        def _del_kw():
+            sel = self._kw_listbox.curselection()
+            if not sel:
+                return
+            self._kw_listbox.delete(sel[0])
+            save_keywords(list(self._kw_listbox.get(0, "end")))
+
+        kw_entry.bind("<Return>", lambda e: _add_kw())
+        tk.Button(ctrl, text="Add", bg=C["accent"], fg="#fff", relief="flat",
+                  font=("Segoe UI", 9, "bold"), padx=10, pady=4, cursor="hand2",
+                  activebackground=C["hover"], command=_add_kw).pack(side="left", padx=(0, 4))
+        tk.Button(ctrl, text="Remove Selected", bg=C["red"], fg="#fff", relief="flat",
+                  font=("Segoe UI", 9), padx=10, pady=4, cursor="hand2",
+                  activebackground=C["border"], command=_del_kw).pack(side="left")
+
     def _move_row(self, i, direction):
         j = i + direction
         if 0 <= j < len(self._rows):
@@ -3197,42 +3499,83 @@ class SqlFilePopup(tk.Toplevel):
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-    def _fetch_content(self, raw_url, contents_url=""):
-        """Fetch full file content. Tries raw_url first, falls back to Contents API."""
-        token = self._read_token()
-        hdrs  = self._gh_headers(token)
-
-        # 1. raw_url (raw.githubusercontent.com)
+    def _fetch_content(self, raw_url, contents_url="", filename=""):
+        """Fetch full file content at PR HEAD. Uses head SHA first to guarantee latest commit."""
+        token  = self._read_token()
+        hdrs   = self._gh_headers(token)
         verify = _ssl_verify(self._cfg)
+        errors = []
+
+        # 1. Contents API at PR head.sha — always the latest committed state
+        head_sha  = (self._pr.get("head") or {}).get("sha", "")
+        head_repo = ((self._pr.get("head") or {}).get("repo") or
+                     (self._pr.get("base") or {}).get("repo") or {})
+        repo_full = head_repo.get("full_name", "")
+        api_base  = self._cfg.get("github_api_url", "https://api.github.com").rstrip("/")
+
+        if head_sha and repo_full and filename:
+            head_url = f"{api_base}/repos/{repo_full}/contents/{filename}?ref={head_sha}"
+            try:
+                r = requests.get(head_url, headers=hdrs, timeout=15, verify=verify)
+                if r.ok:
+                    data = r.json()
+                    if isinstance(data, dict) and data.get("encoding") == "base64":
+                        return base64.b64decode(data["content"]).decode("utf-8", errors="replace"), None
+                    errors.append(f"Contents API (head) unexpected format")
+                else:
+                    errors.append(f"Contents API (head) HTTP {r.status_code}")
+            except Exception as e:
+                errors.append(f"Contents API (head) error: {e}")
+
+        # 2. raw_url (raw.githubusercontent.com) — uses SHA from PR files API response
         if raw_url:
             try:
                 r = requests.get(raw_url, headers=hdrs, timeout=15, verify=verify)
                 if r.ok:
                     return r.text, None
-                raw_err = f"raw_url HTTP {r.status_code}"
+                errors.append(f"raw_url HTTP {r.status_code}")
             except Exception as e:
-                raw_err = str(e)
+                errors.append(str(e))
         else:
-            raw_err = "no raw_url"
+            errors.append("no raw_url")
 
-        # 2. Contents API fallback (base64-encoded response)
+        # 3. contents_url from PR files API (may carry older ref)
         if contents_url:
             try:
-                # Strip query params if any, then add ref from raw_url SHA if possible
                 api_url = contents_url.split("?")[0]
                 r2 = requests.get(api_url, headers=hdrs, timeout=15, verify=verify)
                 if r2.ok:
                     data = r2.json()
                     if isinstance(data, dict) and data.get("encoding") == "base64":
-                        content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-                        return content, None
-                    raw_err += f" | contents API unexpected format"
+                        return base64.b64decode(data["content"]).decode("utf-8", errors="replace"), None
+                    errors.append("contents_url unexpected format")
                 else:
-                    raw_err += f" | contents API HTTP {r2.status_code}: {r2.text[:120]}"
+                    errors.append(f"contents_url HTTP {r2.status_code}: {r2.text[:120]}")
             except Exception as e:
-                raw_err += f" | contents API error: {e}"
+                errors.append(f"contents_url error: {e}")
 
-        return None, raw_err
+        return None, " | ".join(errors)
+
+    def get_sql_comments(self):
+        return getattr(self, "_sql_comments_dict", {})
+
+    def get_keyword_findings(self):
+        return getattr(self, "_keyword_findings", {})
+
+    def _resolve_content(self, r):
+        """Fetch and return file content string (or None) for a row dict."""
+        if r.get("full_content"):
+            return r["full_content"], None
+        content, err = self._fetch_content(
+            r.get("raw_url", ""), r.get("contents_url", ""), r["filename"])
+        if content is None:
+            patch = r.get("patch", "")
+            if patch and r.get("status") == "added":
+                content = "\n".join(
+                    l[1:] for l in patch.splitlines()
+                    if l.startswith('+') and not l.startswith('+++'))
+                err = None
+        return content, err
 
     def _generate(self):
         included = [r for r in self._rows if r["inc"].get()]
@@ -3248,6 +3591,45 @@ class SqlFilePopup(tk.Toplevel):
 
         self._sv.set(f"Fetching {len(included)} file(s)…")
         self.update_idletasks()
+
+        # ── Phase 1: fetch all content ────────────────────────────────────────
+        fetched = {}   # filename → (content, fetch_err)
+        for r in included:
+            fetched[r["filename"]] = self._resolve_content(r)
+
+        # ── Phase 2: keyword scan ─────────────────────────────────────────────
+        keywords = [kw.strip() for kw in
+                    (self._kw_listbox.get(0, "end") if hasattr(self, "_kw_listbox") else load_keywords())
+                    if kw.strip()]
+        findings = {}   # filename → [matched keywords]
+        if keywords:
+            for r in included:
+                fname   = r["filename"]
+                content = fetched[fname][0] or ""
+                patch   = r.get("patch", "")
+                text    = (content + "\n" + patch).lower()
+                hits    = [kw for kw in keywords if kw.lower() in text]
+                if hits:
+                    findings[fname] = hits
+
+        self._keyword_findings = findings
+
+        if findings:
+            lines = ["The following files contain blocked keywords:\n"]
+            for fn, kws in findings.items():
+                lines.append(f"  •  {fn}")
+                lines.append(f"     Keywords: {', '.join(kws)}\n")
+            lines.append("Fix or remove these keywords before generating the SQL file.")
+            messagebox.showerror("⚠ Keyword Alert — Generation Blocked",
+                                 "\n".join(lines), parent=self)
+            self._sv.set("Blocked — keyword(s) found")
+            return
+
+        # ── Phase 3: build SQL file ───────────────────────────────────────────
+        self._sql_comments_dict = {
+            r["filename"]: f"Step {idx}: {r['cmt_var'].get().strip() or os.path.basename(r['filename'])}"
+            for idx, r in enumerate(included, 1)
+        }
 
         pr_num   = self._pr.get("number", "")
         pr_title = self._pr.get("title", "")
@@ -3267,6 +3649,7 @@ class SqlFilePopup(tk.Toplevel):
             dels    = r["deletions"]
             desc    = r["cmt_var"].get().strip() or os.path.basename(fname)
             comment = f"Step {idx}: {desc}"
+            content, fetch_err = fetched[fname]
 
             blk.append("-- " + "-" * 68)
             blk.append(f"-- {comment}")
@@ -3274,27 +3657,6 @@ class SqlFilePopup(tk.Toplevel):
             blk.append(f"-- Status: {status.upper()}  (+{adds} / -{dels})")
             blk.append("-- " + "-" * 68)
             blk.append("")
-
-            content = None
-            fetch_err = None
-
-            # 1. pre-provided full content (mock / offline)
-            if r.get("full_content"):
-                content = r["full_content"]
-
-            # 2. GitHub fetch — raw_url first, Contents API fallback
-            if content is None:
-                content, fetch_err = self._fetch_content(
-                    r.get("raw_url", ""), r.get("contents_url", ""))
-
-            # 3. added files only — reconstruct from patch lines (no auth needed)
-            if content is None:
-                patch = r.get("patch", "")
-                if patch and status == "added":
-                    content = "\n".join(
-                        l[1:] for l in patch.splitlines()
-                        if l.startswith('+') and not l.startswith('+++'))
-                    fetch_err = None  # successfully reconstructed
 
             if content:
                 lines = content.rstrip().splitlines()
@@ -3329,6 +3691,308 @@ class SqlFilePopup(tk.Toplevel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  GitHub PR Preview Popup
+# ─────────────────────────────────────────────────────────────────────────────
+
+class GitHubPRPreviewPopup(tk.Toplevel):
+    """Renders a GitHub-style PR preview: header, description, files, comments."""
+
+    GH = dict(
+        bg="#0d1117", surface="#161b22", card="#21262d",
+        border="#30363d", accent="#58a6ff", text="#e6edf3",
+        muted="#8b949e", green="#3fb950", red="#f85149",
+        purple="#bc8cff", yellow="#d29922", orange="#e3b341",
+        merged="#8957e5",
+        st=dict(added="#1f6931", modified="#1c4a6e", removed="#8a1f1f",
+                renamed="#5a2d82"),
+    )
+
+    def __init__(self, parent, pr, files, review_comments=None, issue_comments=None):
+        super().__init__(parent)
+        self.title(f"GitHub PR #{pr.get('number','?')}  —  Preview")
+        self.geometry("1020x760")
+        self.minsize(820, 560)
+        self.configure(bg=self.GH["bg"])
+        self.grab_set()
+        self.transient(parent)
+
+        self._pr      = pr
+        self._files   = files or []
+        self._rev_cmt = review_comments or []
+        self._iss_cmt = issue_comments or []
+
+        self._build()
+
+    def _build(self):
+        G = self.GH
+        pr = self._pr
+
+        state   = pr.get("state", "open")
+        merged  = bool(pr.get("merged_at"))
+        st_bg   = G["merged"] if merged else (G["green"] if state == "open" else G["muted"])
+        st_lbl  = "Merged" if merged else state.capitalize()
+
+        # ── top bar ───────────────────────────────────────────────────────────
+        topbar = tk.Frame(self, bg="#161b22", height=52)
+        topbar.pack(fill="x"); topbar.pack_propagate(False)
+        tk.Label(topbar, text="◈  GitHub", bg="#161b22", fg=G["text"],
+                 font=("Segoe UI", 11, "bold")).pack(side="left", padx=14, pady=12)
+        tk.Label(topbar, text=f"{pr.get('base',{}).get('repo',{}).get('full_name','') or 'example/repo'}",
+                 bg="#161b22", fg=G["muted"],
+                 font=("Segoe UI", 9)).pack(side="left", pady=12)
+        tk.Frame(topbar, bg=G["border"], width=1).pack(side="left", fill="y", pady=8, padx=8)
+        tk.Label(topbar, text=f"Pull Request #{pr.get('number','?')}",
+                 bg="#161b22", fg=G["accent"],
+                 font=("Segoe UI", 9)).pack(side="left", pady=12)
+        ttk.Button(topbar, text="✕  Close", style="Ghost.TButton",
+                   command=self.destroy).pack(side="right", padx=14, pady=10)
+        tk.Frame(self, bg=G["border"], height=1).pack(fill="x")
+
+        # ── PR title row ──────────────────────────────────────────────────────
+        title_f = tk.Frame(self, bg=G["bg"])
+        title_f.pack(fill="x", padx=24, pady=(14, 6))
+        tk.Label(title_f, text=pr.get("title", "(no title)"),
+                 bg=G["bg"], fg=G["text"],
+                 font=("Segoe UI", 15, "bold"),
+                 wraplength=860, justify="left", anchor="w").pack(side="left", anchor="w")
+
+        meta_f = tk.Frame(self, bg=G["bg"])
+        meta_f.pack(fill="x", padx=24, pady=(0, 10))
+        tk.Label(meta_f, text=f"  {st_lbl}  ",
+                 bg=st_bg, fg="#ffffff",
+                 font=("Segoe UI", 9, "bold"), padx=6, pady=3).pack(side="left")
+        author = (pr.get("user") or {}).get("login", "unknown")
+        base_b = (pr.get("base") or {}).get("ref", "main")
+        head_b = (pr.get("head") or {}).get("ref", "?")
+        tk.Label(meta_f,
+                 text=f"  {author}  wants to merge  {head_b}  →  {base_b}   ·   "
+                      f"opened {(pr.get('created_at') or '')[:10]}",
+                 bg=G["bg"], fg=G["muted"],
+                 font=("Segoe UI", 9)).pack(side="left", padx=8)
+        tk.Frame(self, bg=G["border"], height=1).pack(fill="x", padx=20)
+
+        # ── Notebook-style tabs ───────────────────────────────────────────────
+        n_rev = len([c for c in self._rev_cmt])
+        n_iss = len(self._iss_cmt)
+        tab_bar = tk.Frame(self, bg=G["bg"])
+        tab_bar.pack(fill="x", padx=20)
+        self._tab_frames = {}
+        self._active_tab = tk.StringVar(value="description")
+
+        body_host = tk.Frame(self, bg=G["bg"])
+        body_host.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+
+        def _show_tab(name):
+            for n, f in self._tab_frames.items():
+                f.pack_forget()
+            self._tab_frames[name].pack(fill="both", expand=True)
+            self._active_tab.set(name)
+            for btn in tab_btns:
+                nm, b = btn
+                b.config(bg=G["accent"] if nm == name else G["bg"],
+                         fg="#ffffff" if nm == name else G["muted"])
+
+        tab_btns = []
+        tabs = [
+            ("description", f"📋 Description"),
+            ("files",       f"📁 Files ({len(self._files)})"),
+            ("comments",    f"💬 Comments ({n_rev + n_iss})"),
+        ]
+        for name, label in tabs:
+            b = tk.Button(tab_bar, text=label,
+                          bg=G["bg"], fg=G["muted"],
+                          relief="flat", font=("Segoe UI", 9, "bold"),
+                          padx=14, pady=7, cursor="hand2",
+                          activebackground=G["card"],
+                          command=lambda n=name: _show_tab(n))
+            b.pack(side="left")
+            tab_btns.append((name, b))
+            self._tab_frames[name] = self._make_scrollable(body_host)
+
+        tk.Frame(self, bg=G["border"], height=1).pack(fill="x", padx=20)
+
+        self._build_description(self._tab_frames["description"])
+        self._build_files(self._tab_frames["files"])
+        self._build_comments(self._tab_frames["comments"])
+        _show_tab("description")
+
+    def _make_scrollable(self, parent):
+        outer = tk.Frame(parent, bg=self.GH["bg"])
+        canvas = tk.Canvas(outer, bg=self.GH["bg"], highlightthickness=0)
+        vsb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = tk.Frame(canvas, bg=self.GH["bg"])
+        wid = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(wid, width=e.width))
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+        outer._inner = inner
+        return outer
+
+    def _build_description(self, host):
+        G = self.GH
+        f = host._inner
+        pr_body = (self._pr.get("body") or "").strip() or "(No description provided)"
+
+        card = tk.Frame(f, bg=G["surface"],
+                        highlightbackground=G["border"], highlightthickness=1)
+        card.pack(fill="x", padx=4, pady=8)
+
+        hdr = tk.Frame(card, bg=G["card"])
+        hdr.pack(fill="x")
+        author = (self._pr.get("user") or {}).get("login", "author")
+        tk.Label(hdr, text=f"  {author}  commented  ·  {(self._pr.get('created_at') or '')[:10]}",
+                 bg=G["card"], fg=G["muted"],
+                 font=("Segoe UI", 9), pady=7, padx=8).pack(side="left")
+        tk.Frame(card, bg=G["border"], height=1).pack(fill="x")
+
+        body_f = tk.Frame(card, bg=G["surface"])
+        body_f.pack(fill="x", padx=16, pady=12)
+
+        for line in pr_body.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                tk.Label(body_f, text=stripped[3:],
+                         bg=G["surface"], fg=G["text"],
+                         font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x", pady=(8,2))
+            elif stripped.startswith("- [ ] ") or stripped.startswith("- [x] "):
+                done = stripped.startswith("- [x] ")
+                txt  = stripped[6:]
+                row  = tk.Frame(body_f, bg=G["surface"]); row.pack(fill="x")
+                tk.Label(row, text="☑" if done else "☐",
+                         bg=G["surface"], fg=G["green"] if done else G["muted"],
+                         font=("Segoe UI", 10)).pack(side="left", padx=(4,6))
+                tk.Label(row, text=txt,
+                         bg=G["surface"], fg=G["muted"] if done else G["text"],
+                         font=("Segoe UI", 9), anchor="w").pack(side="left", fill="x")
+            elif stripped.startswith("- "):
+                row = tk.Frame(body_f, bg=G["surface"]); row.pack(fill="x")
+                tk.Label(row, text="•",
+                         bg=G["surface"], fg=G["accent"],
+                         font=("Segoe UI", 9)).pack(side="left", padx=(4,6))
+                tk.Label(row, text=stripped[2:],
+                         bg=G["surface"], fg=G["text"],
+                         font=("Segoe UI", 9), anchor="w",
+                         wraplength=760, justify="left").pack(side="left", fill="x")
+            elif stripped:
+                tk.Label(body_f, text=stripped,
+                         bg=G["surface"], fg=G["text"],
+                         font=("Segoe UI", 9), anchor="w",
+                         wraplength=800, justify="left").pack(fill="x")
+
+    def _build_files(self, host):
+        G  = self.GH
+        f  = host._inner
+        st_colors = G["st"]
+
+        stats_row = tk.Frame(f, bg=G["bg"])
+        stats_row.pack(fill="x", padx=4, pady=(8, 4))
+        total = len(self._files)
+        adds  = sum(f_.get("additions", 0) for f_ in self._files)
+        dels  = sum(f_.get("deletions", 0) for f_ in self._files)
+        tk.Label(stats_row,
+                 text=f"{total} files changed   +{adds} additions   −{dels} deletions",
+                 bg=G["bg"], fg=G["muted"],
+                 font=("Segoe UI", 9)).pack(side="left")
+
+        # group review comments by file
+        rev_by = {}
+        for c in self._rev_cmt:
+            path = c.get("path","")
+            rev_by.setdefault(path, []).append(c)
+
+        for file_ in self._files:
+            fname  = file_.get("filename","")
+            status = file_.get("status","modified")
+            a      = file_.get("additions",0)
+            d      = file_.get("deletions",0)
+            fbg    = st_colors.get(status, G["card"])
+            em     = STATUS_EMOJI.get(status,"~")
+
+            card = tk.Frame(f, bg=G["surface"],
+                            highlightbackground=G["border"], highlightthickness=1)
+            card.pack(fill="x", padx=4, pady=3)
+
+            lborder = tk.Frame(card, bg=fbg, width=4)
+            lborder.pack(side="left", fill="y")
+
+            inner = tk.Frame(card, bg=G["surface"])
+            inner.pack(side="left", fill="x", expand=True, padx=10, pady=7)
+
+            hrow = tk.Frame(inner, bg=G["surface"])
+            hrow.pack(fill="x")
+            tk.Label(hrow, text=f"{em}  {status.upper()}",
+                     bg=fbg, fg="#ffffff",
+                     font=("Segoe UI", 8, "bold"), padx=6, pady=2).pack(side="left")
+            tk.Label(hrow, text=f"  {fname}",
+                     bg=G["surface"], fg=G["accent"],
+                     font=("Consolas", 9, "bold"), anchor="w").pack(side="left")
+            sfg = G["green"] if a >= d else G["red"]
+            tk.Label(hrow, text=f"  +{a}  −{d}",
+                     bg=G["surface"], fg=sfg,
+                     font=("Segoe UI", 9, "bold")).pack(side="right")
+
+            # review comments for this file
+            file_revs = rev_by.get(fname, [])
+            for rc in file_revs:
+                rc_user = (rc.get("user") or {}).get("login","")
+                rc_body = rc.get("body","").strip()
+                rc_date = (rc.get("created_at") or "")[:10]
+                cmt_f = tk.Frame(inner, bg=G["card"],
+                                 highlightbackground=G["border"], highlightthickness=1)
+                cmt_f.pack(fill="x", pady=(4,0))
+                tk.Label(cmt_f,
+                         text=f"  💬  {rc_user}  ·  {rc_date}",
+                         bg=G["card"], fg=G["muted"],
+                         font=("Segoe UI", 8), pady=4, padx=6).pack(anchor="w")
+                tk.Frame(cmt_f, bg=G["border"], height=1).pack(fill="x")
+                tk.Label(cmt_f, text=f"    {rc_body}",
+                         bg=G["card"], fg=G["text"],
+                         font=("Segoe UI", 9), anchor="w", padx=6, pady=5,
+                         wraplength=820, justify="left").pack(anchor="w")
+
+    def _build_comments(self, host):
+        G = self.GH
+        f = host._inner
+        all_comments = []
+        for c in self._iss_cmt:
+            all_comments.append(("issue", c))
+        for c in self._rev_cmt:
+            all_comments.append(("review", c))
+        all_comments.sort(key=lambda x: x[1].get("created_at",""))
+
+        if not all_comments:
+            tk.Label(f, text="No comments on this PR.",
+                     bg=G["bg"], fg=G["muted"],
+                     font=("Segoe UI", 10)).pack(padx=20, pady=20)
+            return
+
+        for kind, c in all_comments:
+            user = (c.get("user") or {}).get("login","")
+            body = c.get("body","").strip()
+            date = (c.get("created_at") or "")[:10]
+            path = c.get("path","")
+
+            card = tk.Frame(f, bg=G["surface"],
+                            highlightbackground=G["border"], highlightthickness=1)
+            card.pack(fill="x", padx=4, pady=4)
+
+            hdr = tk.Frame(card, bg=G["card"])
+            hdr.pack(fill="x")
+            type_lbl = f"📝 Review — {path}" if kind == "review" and path else "💬 Comment"
+            tk.Label(hdr, text=f"  {user}  ·  {date}  ·  {type_lbl}",
+                     bg=G["card"], fg=G["muted"],
+                     font=("Segoe UI", 8), pady=6, padx=8).pack(side="left")
+            tk.Frame(card, bg=G["border"], height=1).pack(fill="x")
+            tk.Label(card, text=body,
+                     bg=G["surface"], fg=G["text"],
+                     font=("Segoe UI", 9), anchor="w", padx=14, pady=8,
+                     wraplength=860, justify="left").pack(anchor="w")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Main Application
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3340,9 +4004,10 @@ class App(tk.Tk):
         self.pr_cache       = None
         self.pr_files       = []
         self.file_comments  = []
-        self._jira_url      = ""
-        self._last_doc_path = None
-        self._last_sql_path = None
+        self._jira_url        = ""
+        self._last_doc_path   = None
+        self._last_sql_path   = None
+        self._last_issue_key  = None
         self._field_widgets = {}
         self._theme_name    = self.config_data.get("theme", "dark")
         C.update(THEMES[self._theme_name])
@@ -3682,6 +4347,29 @@ class App(tk.Tk):
         tk.Label(rp, text="Combine SQL scripts", bg=C["surface"], fg=C["muted"],
                  font=("Segoe UI", 7)).pack(anchor="w", padx=2, pady=(0, 8))
 
+        # ── Attach options ────────────────────────────────────────────────────
+        self._attach_word_var = tk.BooleanVar(
+            value=bool(self.config_data.get("attach_word_doc", True)))
+        self._attach_sql_var  = tk.BooleanVar(
+            value=bool(self.config_data.get("attach_sql_file", True)))
+
+        def _save_attach_prefs(*_):
+            self.config_data["attach_word_doc"] = self._attach_word_var.get()
+            self.config_data["attach_sql_file"] = self._attach_sql_var.get()
+            save_config(self.config_data)
+
+        att_frame = tk.Frame(rp, bg=C["surface"])
+        att_frame.pack(fill="x", pady=(0, 4))
+        tk.Label(att_frame, text="Attach to ticket:", bg=C["surface"], fg=C["muted"],
+                 font=("Segoe UI", 7)).pack(anchor="w", padx=2)
+        att_row = tk.Frame(att_frame, bg=C["surface"]); att_row.pack(fill="x", padx=2)
+        ttk.Checkbutton(att_row, text="Word Doc",
+                        variable=self._attach_word_var,
+                        command=_save_attach_prefs).pack(side="left")
+        ttk.Checkbutton(att_row, text="SQL File",
+                        variable=self._attach_sql_var,
+                        command=_save_attach_prefs).pack(side="left", padx=(8, 0))
+
         jira_btn = ttk.Button(rp, text="✦  Create Jira Ticket", style="Success.TButton",
                               command=self._create_jira_thread)
         jira_btn.pack(fill="x", pady=(0, 2))
@@ -3715,47 +4403,12 @@ class App(tk.Tk):
         rl.pack(anchor="w")
         rl.bind("<Button-1>", lambda e: self._jira_url and webbrowser.open(self._jira_url))
 
-        # ── Presets section ───────────────────────────────────────────────────
-        tk.Frame(rp, bg=C["border"], height=1).pack(fill="x", pady=(10, 6))
-        preset_hdr = tk.Frame(rp, bg=C["surface"]); preset_hdr.pack(fill="x", pady=(0, 4))
-        tk.Frame(preset_hdr, bg=C["yellow"], width=3).pack(side="left", fill="y", padx=(0, 7))
-        tk.Label(preset_hdr, text="PRESETS", bg=C["surface"], fg=C["yellow"],
-                 font=("Segoe UI", 8, "bold")).pack(side="left", anchor="w")
-
-        self._preset_var = tk.StringVar()
-        self._preset_cb  = ttk.Combobox(rp, textvariable=self._preset_var,
-                                        state="readonly", width=18)
-        self._preset_cb.pack(fill="x", pady=(0, 4))
-        self._refresh_preset_list()
-
-        preset_btns = tk.Frame(rp, bg=C["surface"]); preset_btns.pack(fill="x", pady=(0, 2))
-        tk.Button(preset_btns, text="Load", bg=C["accent_dim"], fg=C["accent"],
-                  relief="flat", font=("Segoe UI", 8, "bold"), padx=8, pady=3,
-                  activebackground=C["border"], cursor="hand2",
-                  command=self._load_preset).pack(side="left")
-        tk.Button(preset_btns, text="Save", bg=C["card2"], fg=C["muted"],
-                  relief="flat", font=("Segoe UI", 8), padx=8, pady=3,
-                  activebackground=C["border"], cursor="hand2",
-                  command=self._save_preset).pack(side="left", padx=(4, 0))
-        tk.Button(preset_btns, text="✕", bg=C["card2"], fg=C["red"],
-                  relief="flat", font=("Segoe UI", 8), padx=6, pady=3,
-                  activebackground=C["border"], cursor="hand2",
-                  command=self._delete_preset).pack(side="right")
-
-        # ── Recent tickets section ────────────────────────────────────────────
-        tk.Frame(rp, bg=C["border"], height=1).pack(fill="x", pady=(8, 6))
-        recent_hdr = tk.Frame(rp, bg=C["surface"]); recent_hdr.pack(fill="x", pady=(0, 4))
-        tk.Frame(recent_hdr, bg=C["green"], width=3).pack(side="left", fill="y", padx=(0, 7))
-        tk.Label(recent_hdr, text="RECENT", bg=C["surface"], fg=C["green"],
-                 font=("Segoe UI", 8, "bold")).pack(side="left", anchor="w")
-        see_all = tk.Label(recent_hdr, text="See all →", bg=C["surface"], fg=C["accent"],
-                           font=("Segoe UI", 7), cursor="hand2")
-        see_all.pack(side="right")
-        see_all.bind("<Button-1>", lambda e: self._show_all_recent())
-
-        self._recent_panel = tk.Frame(rp, bg=C["surface"])
-        self._recent_panel.pack(fill="x")
-        self._refresh_recent_panel()
+        self._attach_btn = ttk.Button(rp, text="⊞  Attach Files to Ticket",
+                                      style="Accent.TButton", state="disabled",
+                                      command=self._attach_files_thread)
+        self._attach_btn.pack(fill="x", pady=(6, 0))
+        Tooltip(self._attach_btn,
+                "Attach Word doc and/or SQL file to the last created Jira ticket.")
 
         # ── Left content pane ─────────────────────────────────────────────────
         lp = tk.Frame(outer, bg=C["bg"])
@@ -3942,6 +4595,9 @@ class App(tk.Tk):
                    command=self._fetch_pr_thread).pack(side="left", padx=(8, 0))
         ttk.Button(row, text="⚗ Test Data", style="Orange.TButton",
                    command=self._load_mock_data).pack(side="left", padx=(4, 0))
+        self._gh_preview_btn = ttk.Button(row, text="⊞ PR Preview", style="Ghost.TButton",
+                   state="disabled", command=self._show_gh_preview)
+        self._gh_preview_btn.pack(side="left", padx=(4, 0))
 
         info_f = tk.Frame(card, bg=C["card"]); info_f.pack(fill="x", pady=(6, 0))
         self.pr_info_var = tk.StringVar(value="No PR loaded — enter a PR URL or number above")
@@ -4057,10 +4713,13 @@ class App(tk.Tk):
         enabled = [fd for fd in self.config_data["fields"]
                    if fd.get("enabled", True) and not fd.get("jira_field")]
 
+        saved_vals = load_field_values()
+
         for idx, fd in enumerate(enabled):
             key = fd["key"]; label = fd["label"]
             ftype = fd.get("type","text"); choices = fd.get("choices",[])
-            default = fd.get("default",""); req = fd.get("required", False)
+            default = saved_vals.get(key, fd.get("default", ""))
+            req = fd.get("required", False)
             row_bg = C["card"] if idx % 2 == 0 else C["bg"]
 
             outer = tk.Frame(flat, bg=row_bg)
@@ -4104,6 +4763,36 @@ class App(tk.Tk):
                           command=_edit_choices).pack(side="left", padx=(3, 0))
 
             self._field_widgets[key] = var
+
+        # ── footer: description checkbox + defaults buttons ───────────────────
+        sep = tk.Frame(flat, bg=C["border"], height=1)
+        sep.pack(fill="x", padx=10, pady=(8, 4))
+        cb_row = tk.Frame(flat, bg=C["bg"])
+        cb_row.pack(fill="x", padx=10, pady=(0, 4))
+        if not hasattr(self, "_include_in_desc_var"):
+            self._include_in_desc_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(cb_row, text="Add Issue Details to Jira Description",
+                        variable=self._include_in_desc_var).pack(side="left")
+
+        def _save_defaults():
+            vals = {k: v.get() for k, v in self._field_widgets.items()}
+            save_field_values(vals)
+            self._set_status("Issue Details defaults saved")
+
+        def _clear_fields():
+            for v in self._field_widgets.values():
+                v.set("")
+
+        btn_row = tk.Frame(flat, bg=C["bg"])
+        btn_row.pack(fill="x", padx=10, pady=(0, 8))
+        tk.Button(btn_row, text="Save as Default", bg=C["accent_dim"], fg=C["accent"],
+                  relief="flat", font=("Segoe UI", 8, "bold"), padx=8, pady=3,
+                  activebackground=C["border"], cursor="hand2",
+                  command=_save_defaults).pack(side="left")
+        tk.Button(btn_row, text="Clear All", bg=C["card2"], fg=C["muted"],
+                  relief="flat", font=("Segoe UI", 8), padx=8, pady=3,
+                  activebackground=C["border"], cursor="hand2",
+                  command=_clear_fields).pack(side="left", padx=(4, 0))
 
     def _rebuild_jira_fields_section(self):
         if hasattr(self, "_jira_fields_card") and self._jira_fields_card:
@@ -4282,6 +4971,14 @@ class App(tk.Tk):
         self.sql_btn.pack(fill="x", pady=(0, 6))
         Tooltip(self.sql_btn, "Combine all PR SQL files into a single runnable script.")
 
+        att_row2 = tk.Frame(card, bg=C["card"]); att_row2.pack(fill="x", pady=(0, 4))
+        tk.Label(att_row2, text="Attach:", bg=C["card"], fg=C["muted"],
+                 font=("Segoe UI", 7)).pack(side="left", padx=(0, 4))
+        ttk.Checkbutton(att_row2, text="Word Doc",
+                        variable=self._attach_word_var).pack(side="left")
+        ttk.Checkbutton(att_row2, text="SQL File",
+                        variable=self._attach_sql_var).pack(side="left", padx=(8, 0))
+
         jira_btn = ttk.Button(card, text="  Create Jira Ticket  ", style="Success.TButton",
                               command=self._create_jira_thread)
         jira_btn.pack(fill="x")
@@ -4343,21 +5040,22 @@ class App(tk.Tk):
         reporter   = fv.get("reporter") or "—"
         description = fv.get("description") or "No description provided."
 
-        # non-jira detail fields
+        # non-jira detail fields (only when checkbox enabled)
+        _show_details = getattr(self, "_include_in_desc_var", None)
+        _show_details = _show_details.get() if _show_details else True
         detail_rows = []
-        for fd in self.config_data["fields"]:
-            if not fd.get("enabled", True): continue
-            if fd.get("jira_field"):        continue
-            val = fv.get(fd["key"], "")
-            if val and fd["key"] not in ("doc_name", "doc_title"):
-                detail_rows.append((fd["label"], val))
+        if _show_details:
+            for fd in self.config_data["fields"]:
+                if not fd.get("enabled", True): continue
+                if fd.get("jira_field"):        continue
+                val = fv.get(fd["key"], "")
+                if val and fd["key"] not in ("doc_name", "doc_title"):
+                    detail_rows.append((fd["label"], val))
 
         file_rows = []
-        for fc in self.file_comments:
-            jc = (fc.get("jira_comment") or "").strip()
-            status_emoji = {"added":"A","modified":"M","removed":"D",
-                            "renamed":"R","copied":"C"}.get(fc.get("status",""), "~")
-            file_rows.append((fc.get("filename",""), fc.get("status",""), status_emoji, jc))
+        for fn, status, jira_cmt, sql_cmt in self._build_changed_files():
+            em = STATUS_EMOJI.get(status, "~")
+            file_rows.append((fn, status, em, jira_cmt, sql_cmt))
 
         # ── Window ────────────────────────────────────────────────────────────
         win = tk.Toplevel(self)
@@ -4485,21 +5183,7 @@ class App(tk.Tk):
             body.pack(fill="x", padx=14, pady=10)
             return body
 
-        # Issue Details
-        if detail_rows:
-            det_body = _section(left, "Issue Details")
-            for lbl, val in detail_rows:
-                row = tk.Frame(det_body, bg=JC["surface"])
-                row.pack(fill="x", pady=2)
-                tk.Label(row, text=f"•  {lbl}:",
-                         bg=JC["surface"], fg=JC["muted"],
-                         font=("Segoe UI", 9), width=18, anchor="w").pack(side="left")
-                tk.Label(row, text=val,
-                         bg=JC["surface"], fg=JC["text"],
-                         font=("Segoe UI", 9), anchor="w", wraplength=420,
-                         justify="left").pack(side="left", fill="x", expand=True)
-
-        # Description
+        # Description first
         desc_body = _section(left, "Description")
         tk.Label(desc_body, text=description,
                  bg=JC["surface"], fg=JC["text"],
@@ -4511,7 +5195,7 @@ class App(tk.Tk):
             fc_body = _section(left, "Changed Files")
             st_colors = {"added": "#1a7f37", "modified": "#0969da",
                          "removed": "#cf222e", "renamed": "#8250df"}
-            for fname, status, emoji, jcmt in file_rows:
+            for fname, status, emoji, jcmt, sqlcmt in file_rows:
                 frow = tk.Frame(fc_body, bg="#F8F9FB",
                                 highlightbackground=JC["border"],
                                 highlightthickness=1)
@@ -4529,6 +5213,42 @@ class App(tk.Tk):
                              bg="#F8F9FB", fg=JC["muted"],
                              font=("Segoe UI", 8),
                              wraplength=420, justify="left").pack(anchor="w")
+                if sqlcmt:
+                    tk.Label(finner, text=f"    ↳  SQL: {sqlcmt}",
+                             bg="#F8F9FB", fg=JC["yellow"],
+                             font=("Segoe UI", 8),
+                             wraplength=420, justify="left").pack(anchor="w")
+
+        # Issue Details table — last in left column
+        if detail_rows:
+            det_body = _section(left, "Issue Details")
+            hdr_row = tk.Frame(det_body, bg=JC["section"])
+            hdr_row.pack(fill="x", pady=(0, 2))
+            tk.Label(hdr_row, text="Field",
+                     bg=JC["section"], fg=JC["muted"],
+                     font=("Segoe UI", 8, "bold"), width=20, anchor="w",
+                     padx=4, pady=3).pack(side="left")
+            tk.Frame(hdr_row, bg=JC["border"], width=1).pack(side="left", fill="y")
+            tk.Label(hdr_row, text="Value",
+                     bg=JC["section"], fg=JC["muted"],
+                     font=("Segoe UI", 8, "bold"), anchor="w",
+                     padx=8, pady=3).pack(side="left", fill="x", expand=True)
+            tk.Frame(det_body, bg=JC["border"], height=1).pack(fill="x", pady=(0, 2))
+            for i, (lbl, val) in enumerate(detail_rows):
+                row_bg = JC["surface"] if i % 2 == 0 else "#F8F9FB"
+                row = tk.Frame(det_body, bg=row_bg)
+                row.pack(fill="x")
+                tk.Label(row, text=lbl,
+                         bg=row_bg, fg=JC["muted"],
+                         font=("Segoe UI", 9), width=20, anchor="w",
+                         padx=4, pady=3).pack(side="left")
+                tk.Frame(row, bg=JC["border"], width=1).pack(side="left", fill="y")
+                tk.Label(row, text=val,
+                         bg=row_bg, fg=JC["text"],
+                         font=("Segoe UI", 9), anchor="w",
+                         padx=8, pady=3, wraplength=400,
+                         justify="left").pack(side="left", fill="x", expand=True)
+                tk.Frame(det_body, bg=JC["border"], height=1).pack(fill="x")
 
         # ── RIGHT column: details sidebar ─────────────────────────────────────
         right = tk.Frame(cols, bg=JC["surface"],
@@ -4601,59 +5321,38 @@ class App(tk.Tk):
             _type_map = {"Bug":"Bug","Enhancement":"Story","Task":"Task",
                          "Story":"Story","Epic":"Epic","Sub-task":"Sub-task","Incident":"Bug"}
             _issue_type = _type_map.get(fv.get("issue_type","Bug"), "Bug")
-            _detail_bullets = []
-            for _fd in self.config_data["fields"]:
-                if not _fd.get("enabled", True): continue
-                if _fd.get("jira_field"): continue
-                _val = fv.get(_fd["key"], "")
-                if _val:
-                    _show = _fd.get("show_label_in_jira", True)
-                    _txt = f"{_fd['label']}: {_val}" if _show else _val
-                    _detail_bullets.append({
-                        "type": "listItem",
-                        "content": [{"type": "paragraph",
-                                     "content": [{"type": "text", "text": _txt}]}]})
-            _fc_bullets = []
-            for _fc in self.file_comments:
-                _jc = (_fc.get("jira_comment") or _fc.get("comment","")).strip()
-                _t = f"{STATUS_EMOJI.get(_fc['status'],'~')} {_fc['filename']}  [{_fc['status'].upper()}]"
-                if _jc: _t += f"\n    {_jc}"
-                _fc_bullets.append({"type":"listItem","content":[
-                    {"type":"paragraph","content":[{"type":"text","text":_t}]}]})
-            _adf = {"type":"doc","version":1,"content":[
-                {"type":"heading","attrs":{"level":3},
-                 "content":[{"type":"text","text":"Issue Details"}]},
-                {"type":"bulletList","content":_detail_bullets} if _detail_bullets else
-                {"type":"paragraph","content":[{"type":"text","text":""}]},
-                {"type":"heading","attrs":{"level":3},
-                 "content":[{"type":"text","text":"Description"}]},
-                {"type":"paragraph","content":[
-                    {"type":"text","text":fv.get("description") or "No description."}]},
-            ] + ([{"type":"heading","attrs":{"level":3},
-                   "content":[{"type":"text","text":"Changed Files"}]},
-                  {"type":"bulletList","content":_fc_bullets}] if _fc_bullets else [])}
+            _inc = getattr(self, "_include_in_desc_var", None)
+            _inc = _inc.get() if _inc else True
+            _desc_lines = [fv.get("description") or ""]
+            _changed = self._build_changed_files()
+            if _changed:
+                _desc_lines.append("")
+                _desc_lines.append("h3. Changed Files")
+                for _fn, _st, _jc, _sc in _changed:
+                    _t = f"{STATUS_EMOJI.get(_st,'~')} {_fn}  [{_st.upper()}]"
+                    if _jc: _t += f"\n  {_jc}"
+                    if _sc: _t += f"\n  SQL: {_sc}"
+                    _desc_lines.append(f"* {_t}")
+            if _inc:
+                _det_rows = [(fd["label"], fv.get(fd["key"], ""))
+                             for fd in self.config_data["fields"]
+                             if fd.get("enabled", True) and not fd.get("jira_field")
+                             and fd["key"] not in ("doc_name","doc_title")
+                             and fv.get(fd["key"], "")]
+                if _det_rows:
+                    _desc_lines.append("")
+                    _desc_lines.append("h3. Issue Details")
+                    _desc_lines.append("||Field||Value||")
+                    for _lbl, _val in _det_rows:
+                        _desc_lines.append(f"|{_lbl}|{_val}|")
             _payload = {"fields":{
-                "project":   {"key": fv.get("project") or proj_key_},
-                "summary":   fv.get("summary") or "(no summary)",
-                "issuetype": {"name": _issue_type},
-                "description": _adf,
+                "project":     {"key": fv.get("project") or proj_key_},
+                "summary":     fv.get("summary") or "(no summary)",
+                "issuetype":   {"name": _issue_type},
+                "description": "\n".join(_desc_lines),
             }}
             if fv.get("reporter"):
                 _payload["fields"]["reporter"] = {"name": fv["reporter"]}
-            _MULTI = {"components","fixVersions","labels"}
-            _NAME  = {"priority","issuetype"}
-            for _fd in self.config_data["fields"]:
-                if _fd.get("jira_field"): continue
-                _jk = _fd.get("jira_key")
-                if not _jk: continue
-                _v = fv.get(_fd["key"],"").strip()
-                if not _v: continue
-                if _jk in _MULTI:
-                    _payload["fields"][_jk] = [{"name": _v}]
-                elif _jk in _NAME:
-                    _payload["fields"][_jk] = {"name": _v}
-                else:
-                    _payload["fields"][_jk] = _v
             self.clipboard_clear()
             self.clipboard_append(json.dumps(_payload, indent=2))
             messagebox.showinfo("Copied", "Jira API payload copied to clipboard.", parent=win)
@@ -4804,12 +5503,51 @@ class App(tk.Tk):
         jira_ssl_var = _make_ssl_toggle(sf, "Jira SSL Verify",   "⊡",
                                         "jira_ssl_verify",   default=True)
 
+        # ── Jira Auth Method selector ─────────────────────────────────────────
+        _auth_methods = [("Basic Auth (email + API token)", "basic"),
+                         ("Bearer Token (PAT / Server)",    "bearer"),
+                         ("OAuth 2.0 (email + access token)", "oauth")]
+        _auth_row_n = len([w for w in sf.winfo_children()])
+        auth_row_bg = C["card"] if _auth_row_n % 2 == 0 else C["bg"]
+        auth_row = tk.Frame(sf, bg=auth_row_bg)
+        auth_row.pack(fill="x", padx=16, pady=0)
+        auth_inner = tk.Frame(auth_row, bg=auth_row_bg)
+        auth_inner.pack(fill="x", padx=6, pady=6)
+        auth_lbl_f = tk.Frame(auth_inner, bg=auth_row_bg)
+        auth_lbl_f.pack(side="left")
+        tk.Label(auth_lbl_f, text="⊡", bg=auth_row_bg, fg=C["accent"],
+                 font=("Segoe UI", 9), width=2).pack(side="left")
+        tk.Label(auth_lbl_f, text="Jira Auth Method", bg=auth_row_bg, fg=C["muted"],
+                 width=22, anchor="w", font=("Segoe UI", 9)).pack(side="left")
+        jira_auth_method_var = tk.StringVar(
+            value=self.config_data.get("jira_auth_method", "basic"))
+        btn_f = tk.Frame(auth_inner, bg=auth_row_bg)
+        btn_f.pack(side="left")
+        _auth_btns = {}
+        def _refresh_auth_btns(selected):
+            for _v, _b in _auth_btns.items():
+                if _v == selected:
+                    _b.configure(bg=C["accent"], fg="#ffffff", relief="flat")
+                else:
+                    _b.configure(bg=C["card2"], fg=C["muted"], relief="flat")
+        for _lbl, _val in _auth_methods:
+            def _pick(v=_val):
+                jira_auth_method_var.set(v)
+                _refresh_auth_btns(v)
+            b = tk.Button(btn_f, text=_lbl, font=("Segoe UI", 8),
+                          relief="flat", padx=8, pady=3, cursor="hand2",
+                          command=_pick)
+            b.pack(side="left", padx=(0, 4))
+            _auth_btns[_val] = b
+        _refresh_auth_btns(jira_auth_method_var.get())
+
         def _save():
             for k, v2 in vars_.items():
                 self.config_data[k] = v2.get()
             self.config_data["auto_open_word_doc"]  = auto_open_var.get()
             self.config_data["github_ssl_verify"]   = gh_ssl_var.get()
             self.config_data["jira_ssl_verify"]     = jira_ssl_var.get()
+            self.config_data["jira_auth_method"]    = jira_auth_method_var.get()
             save_config(self.config_data)
             self._set_status("Settings saved")
             win.destroy()
@@ -4876,6 +5614,7 @@ class App(tk.Tk):
                 snap[k] = v2.get()
             snap["jira_ssl_verify"]   = jira_ssl_var.get()
             snap["github_ssl_verify"] = gh_ssl_var.get()
+            snap["jira_auth_method"]  = jira_auth_method_var.get()
             self._test_jira_connection(parent=win, cfg=snap)
 
         tk.Button(br, text="⚡  Test Jira",
@@ -4901,7 +5640,8 @@ class App(tk.Tk):
             messagebox.showerror("Jira Test — Token Error", str(e), parent=parent)
             return
 
-        hdrs   = jira_auth_headers(email, jira_tok)
+        method = cfg.get("jira_auth_method", "basic")
+        hdrs   = jira_auth_headers(email, jira_tok, method)
         verify = _jira_ssl_verify(cfg)
 
         def _fetch():
@@ -5055,125 +5795,6 @@ class App(tk.Tk):
             self._rebuild_fields_card()
             self._set_status("Fields updated — defaults saved")
 
-    # ── Recent tickets ────────────────────────────────────────────────────────
-
-    def _refresh_recent_panel(self):
-        if not hasattr(self, "_recent_panel"):
-            return
-        for w in self._recent_panel.winfo_children():
-            w.destroy()
-        recent = self.config_data.get("recent_tickets", [])[:3]
-        if not recent:
-            tk.Label(self._recent_panel, text="No tickets yet",
-                     bg=C["surface"], fg=C["muted"],
-                     font=("Segoe UI", 7, "italic")).pack(anchor="w")
-            return
-        for t in recent:
-            row = tk.Frame(self._recent_panel, bg=C["surface"])
-            row.pack(fill="x", pady=1)
-            key_lbl = tk.Label(row, text=t["key"], bg=C["surface"], fg=C["accent"],
-                               font=("Segoe UI", 8, "bold"), cursor="hand2")
-            key_lbl.pack(side="left")
-            key_lbl.bind("<Button-1>", lambda e, u=t["url"]: webbrowser.open(u))
-            title = t.get("title", "")[:22] + ("…" if len(t.get("title","")) > 22 else "")
-            tk.Label(row, text=f"  {title}", bg=C["surface"], fg=C["muted"],
-                     font=("Segoe UI", 7)).pack(side="left")
-
-    def _show_all_recent(self):
-        recent = self.config_data.get("recent_tickets", [])
-        if not recent:
-            messagebox.showinfo("Recent Tickets", "No tickets created yet.")
-            return
-        dlg = tk.Toplevel(self)
-        dlg.title(f"{APP_NAME}  —  Recent Tickets")
-        dlg.geometry("480x360")
-        dlg.configure(bg=C["bg"])
-        dlg.grab_set()
-        dlg.transient(self)
-        tk.Frame(dlg, bg=C["green"], height=3).pack(fill="x")
-        hdr = tk.Frame(dlg, bg=C["surface"]); hdr.pack(fill="x")
-        tk.Frame(hdr, bg=C["green"], width=4).pack(side="left", fill="y")
-        ti = tk.Frame(hdr, bg=C["surface"]); ti.pack(side="left", padx=14, pady=10)
-        tk.Label(ti, text="Recent Jira Tickets", bg=C["surface"], fg=C["text"],
-                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        tk.Label(ti, text="Last 10 tickets created from this session",
-                 bg=C["surface"], fg=C["muted"],
-                 font=("Segoe UI", 8)).pack(anchor="w")
-        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x")
-        for i, t in enumerate(recent):
-            bg = C["card"] if i % 2 == 0 else C["surface"]
-            row = tk.Frame(dlg, bg=bg); row.pack(fill="x", padx=8, pady=2)
-            key_lbl = tk.Label(row, text=t["key"], bg=bg, fg=C["accent"],
-                               font=("Segoe UI", 9, "bold"), width=12, anchor="w",
-                               cursor="hand2")
-            key_lbl.pack(side="left", padx=(8, 4), pady=5)
-            key_lbl.bind("<Button-1>", lambda e, u=t["url"]: webbrowser.open(u))
-            tk.Label(row, text=t.get("title","")[:38], bg=bg, fg=C["text"],
-                     font=("Segoe UI", 9), anchor="w").pack(side="left", fill="x", expand=True)
-            tk.Label(row, text=t.get("date",""), bg=bg, fg=C["muted"],
-                     font=("Segoe UI", 8)).pack(side="right", padx=8)
-        tk.Frame(dlg, bg=C["border"], height=1).pack(fill="x", pady=(6, 0))
-        tk.Button(dlg, text="Close", bg=C["card2"], fg=C["muted"], relief="flat",
-                  font=("Segoe UI", 9), padx=12, pady=5,
-                  activebackground=C["border"], cursor="hand2",
-                  command=dlg.destroy).pack(side="right", padx=12, pady=8)
-
-    # ── Presets ───────────────────────────────────────────────────────────────
-
-    def _refresh_preset_list(self):
-        if not hasattr(self, "_preset_cb"):
-            return
-        names = list(self.config_data.get("field_presets", {}).keys())
-        self._preset_cb.config(values=names)
-        if names and self._preset_var.get() not in names:
-            self._preset_var.set(names[0])
-        elif not names:
-            self._preset_var.set("")
-
-    def _load_preset(self):
-        name = self._preset_var.get()
-        presets = self.config_data.get("field_presets", {})
-        if name not in presets:
-            messagebox.showwarning("No Preset", "Select a preset first.", parent=self)
-            return
-        values = presets[name]
-        for key, var in {**getattr(self, "_field_widgets", {}),
-                         **getattr(self, "_jira_field_widgets", {})}.items():
-            if key in values:
-                var.set(values[key])
-        self._set_status(f"Preset '{name}' loaded")
-
-    def _save_preset(self):
-        name = simpledialog.askstring(
-            "Save Preset", "Preset name:", parent=self,
-            initialvalue=self._preset_var.get() or "")
-        if not name or not name.strip():
-            return
-        name = name.strip()
-        values = {}
-        for key, var in {**getattr(self, "_field_widgets", {}),
-                         **getattr(self, "_jira_field_widgets", {})}.items():
-            v = var.get().strip()
-            if v:
-                values[key] = v
-        self.config_data.setdefault("field_presets", {})[name] = values
-        save_config(self.config_data)
-        self._refresh_preset_list()
-        self._preset_var.set(name)
-        self._set_status(f"Preset '{name}' saved")
-
-    def _delete_preset(self):
-        name = self._preset_var.get()
-        presets = self.config_data.get("field_presets", {})
-        if name not in presets:
-            messagebox.showwarning("No Preset", "Select a preset to delete.", parent=self)
-            return
-        if messagebox.askyesno("Delete Preset", f'Delete preset "{name}"?', parent=self):
-            del presets[name]
-            save_config(self.config_data)
-            self._refresh_preset_list()
-            self._set_status(f"Preset '{name}' deleted")
-
     # ── Fetch PR ──────────────────────────────────────────────────────────────
 
     def _fetch_pr_thread(self):
@@ -5227,6 +5848,25 @@ class App(tk.Tk):
                 headers=hdrs, timeout=15, verify=verify)
             files_r.raise_for_status()
             files = files_r.json()
+
+            # fetch per-file review comments
+            rev_r = requests.get(
+                f"{api_base}/repos/{owner}/{repo}/pulls/{num}/comments?per_page=100",
+                headers=hdrs, timeout=15, verify=verify)
+            review_comments = rev_r.json() if rev_r.ok else []
+
+            # fetch PR-level issue comments
+            iss_r = requests.get(
+                f"{api_base}/repos/{owner}/{repo}/issues/{num}/comments?per_page=100",
+                headers=hdrs, timeout=15, verify=verify)
+            issue_comments = iss_r.json() if iss_r.ok else []
+
+            # fetch PR reviews (to get reviewer names)
+            reviews_r = requests.get(
+                f"{api_base}/repos/{owner}/{repo}/pulls/{num}/reviews?per_page=100",
+                headers=hdrs, timeout=15, verify=verify)
+            pr_reviews = reviews_r.json() if reviews_r.ok else []
+
         except requests.HTTPError as e:
             msg = f"GitHub API error {e.response.status_code}:\n{e.response.text[:300]}"
             self.after(0, lambda m=msg: messagebox.showerror("GitHub Error", m))
@@ -5235,20 +5875,81 @@ class App(tk.Tk):
             self.after(0, lambda m=str(e): messagebox.showerror("Network Error", m))
             self.after(0, self.progress.stop); return
 
-        self.pr_cache = pr; self.pr_files = files; self.file_comments = []
+        # group review comments by file — sort newest-first so index 0 = latest comment
+        from collections import defaultdict
+        rev_by_file = defaultdict(list)
+        for c in sorted(review_comments,
+                        key=lambda x: x.get("updated_at") or x.get("created_at", ""),
+                        reverse=True):
+            path = c.get("path", "")
+            body = c.get("body", "").strip()
+            user = (c.get("user") or {}).get("login", "")
+            if path and body:
+                rev_by_file[path].append(f"{user}: {body}" if user else body)
+
+        # build file_comments — use latest comment only per file
+        file_comments = []
+        for f in files:
+            fname    = f.get("filename", "")
+            comments = rev_by_file.get(fname, [])
+            jira_cmt = comments[0] if comments else ""
+            word_cmt = jira_cmt
+            file_comments.append(dict(
+                filename=fname, status=f.get("status", "modified"),
+                additions=f.get("additions", 0), deletions=f.get("deletions", 0),
+                word_comment=word_cmt, jira_comment=jira_cmt,
+                comment=word_cmt, screenshots=[]))
+
+        # pick reviewer: first APPROVED reviewer, else first reviewer in any review
+        reviewer_login = ""
+        approved = [r for r in pr_reviews if r.get("state") == "APPROVED"]
+        if approved:
+            reviewer_login = (approved[0].get("user") or {}).get("login", "")
+        elif pr_reviews:
+            reviewer_login = (pr_reviews[0].get("user") or {}).get("login", "")
+        # fall back to first requested_reviewer if no reviews yet
+        if not reviewer_login:
+            req_reviewers = pr.get("requested_reviewers") or []
+            if req_reviewers:
+                reviewer_login = (req_reviewers[0] or {}).get("login", "")
+
+        self.pr_cache          = pr
+        self.pr_files          = files
+        self.file_comments     = file_comments
+        self.pr_review_comments= review_comments
+        self.pr_issue_comments = issue_comments
+        self.pr_reviews        = pr_reviews
 
         def _ui():
             self.pr_info_var.set(
                 f"  #{pr['number']}  {pr['title']}   "
                 f"{pr['state'].upper()}   by {pr['user']['login']}   "
                 f"{(pr.get('created_at') or '')[:10]}")
-            # auto-fill fields from PR
-            if "git_link" in self._field_widgets:
-                self._field_widgets["git_link"].set(pr.get("html_url", ""))
-            if "summary" in self._field_widgets and not self._field_widgets["summary"].get():
-                itype = self._field_widgets.get("issue_type",
-                                                tk.StringVar(value="")).get()
-                self._field_widgets["summary"].set(f"[{itype}] {pr['title']}")
+
+            jfw = getattr(self, "_jira_field_widgets", {})
+
+            # PR title → Jira Summary
+            if "summary" in jfw and not jfw["summary"].get().strip():
+                jfw["summary"].set(pr["title"])
+
+            # PR creator → Reporter
+            author = (pr.get("user") or {}).get("login", "")
+            if "reporter" in jfw and author:
+                jfw["reporter"].set(author)
+
+            # PR reviewer → Assignee
+            if "assignee" in jfw and reviewer_login:
+                jfw["assignee"].set(reviewer_login)
+
+            # PR body → Description text area
+            pr_body = (pr.get("body") or "").strip()
+            if pr_body:
+                cur = self.desc_text.get("1.0", "end-1c").strip()
+                if not cur or cur == "Describe the issue in detail...":
+                    self.desc_text.delete("1.0", "end")
+                    self.desc_text.config(fg=C["text"])
+                    self.desc_text.insert("1.0", pr_body)
+
             self.pr_url_var.set(pr.get("html_url", ""))
 
             total = len(files)
@@ -5264,8 +5965,11 @@ class App(tk.Tk):
             self.files_sum_var.set("   ".join(parts))
             if hasattr(self, "sql_btn"):
                 self.sql_btn.config(state="normal")
+            if hasattr(self, "_gh_preview_btn"):
+                self._gh_preview_btn.config(state="normal")
             self.progress.stop()
-            self._set_status(f"PR #{pr['number']} loaded — {total} files")
+            self._set_status(f"PR #{pr['number']} loaded — {total} files"
+                             + (f"  |  {len(review_comments)} review comments" if review_comments else ""))
 
         self.after(0, _ui)
 
@@ -5275,11 +5979,15 @@ class App(tk.Tk):
         if not self.pr_files:
             messagebox.showinfo("No PR loaded", "Fetch a PR first.", parent=self)
             return
-        dlg = SqlFilePopup(self, self.pr_files, self.pr_cache or {}, self.config_data)
+        dlg = SqlFilePopup(self, self.pr_files, self.pr_cache or {}, self.config_data, self.file_comments)
         self.wait_window(dlg)
         result = dlg.get_result()
         if result and os.path.exists(result):
             self._last_sql_path = result
+        sql_cmts = dlg.get_sql_comments()
+        if sql_cmts:
+            self._sql_file_comments = sql_cmts
+        self._sql_keyword_findings = dlg.get_keyword_findings()
 
     # ── Mock / test data ──────────────────────────────────────────────────────
 
@@ -5577,7 +6285,7 @@ class App(tk.Tk):
                 "changes":      5,
                 "patch":        patch_small,
                 "full_content": full_small,
-                "blob_url":     "",
+                "blob_url":     "https://github.com/example/db-repo/blob/feature/sql-overhaul/db/views/v_customer_summary.sql",
                 "raw_url":      "",
                 "contents_url": "",
             },
@@ -5589,7 +6297,7 @@ class App(tk.Tk):
                 "changes":      26,
                 "patch":        patch_medium,
                 "full_content": full_medium,
-                "blob_url":     "",
+                "blob_url":     "https://github.com/example/db-repo/blob/feature/sql-overhaul/db/procedures/sp_update_order_status.sql",
                 "raw_url":      "",
                 "contents_url": "",
             },
@@ -5601,7 +6309,7 @@ class App(tk.Tk):
                 "changes":      72,
                 "patch":        patch_big,
                 "full_content": None,
-                "blob_url":     "",
+                "blob_url":     "https://github.com/example/db-repo/blob/feature/sql-overhaul/db/packages/pkg_inventory_mgmt.sql",
                 "raw_url":      "",
                 "contents_url": "",
             },
@@ -5618,7 +6326,61 @@ class App(tk.Tk):
                 "contents_url": "",
             },
         ]
+
+        # Mock per-file review comments (simulate GitHub PR review comments)
+        self.pr_review_comments = [
+            {"path": "db/views/v_customer_summary.sql",
+             "body": "NVL fallback to BRONZE looks good. Should we index loyalty_points.customer_id?",
+             "user": {"login": "reviewer_alice"}, "created_at": "2026-05-11T10:22:00Z",
+             "line": 8, "commit_id": "abc123"},
+            {"path": "db/views/v_customer_summary.sql",
+             "body": "GROUP BY clause updated correctly — approved.",
+             "user": {"login": "reviewer_bob"}, "created_at": "2026-05-11T11:05:00Z",
+             "line": 14, "commit_id": "abc123"},
+            {"path": "db/procedures/sp_update_order_status.sql",
+             "body": "New status values PICKED and OUT_FOR_DELIVERY match the logistics workflow spec.",
+             "user": {"login": "reviewer_alice"}, "created_at": "2026-05-12T09:10:00Z",
+             "line": 17, "commit_id": "def456"},
+            {"path": "db/procedures/sp_update_order_status.sql",
+             "body": "order_status_history insert is missing an index on order_id — raise a follow-up ticket.",
+             "user": {"login": "reviewer_carol"}, "created_at": "2026-05-12T14:30:00Z",
+             "line": 22, "commit_id": "def456"},
+            {"path": "db/packages/pkg_inventory_mgmt.sql",
+             "body": "Package spec looks clean. Confirm reserve_stock handles concurrent transactions via SELECT FOR UPDATE.",
+             "user": {"login": "reviewer_bob"}, "created_at": "2026-05-13T08:55:00Z",
+             "line": 5, "commit_id": "ghi789"},
+        ]
+
+        # Mock PR-level issue comments
+        self.pr_issue_comments = [
+            {"body": "LGTM overall. The inventory package is a great addition — much cleaner than the old inline logic.",
+             "user": {"login": "reviewer_alice"}, "created_at": "2026-05-14T09:00:00Z"},
+            {"body": "Merge after confirming loyalty_points index. Adding that as a follow-up Jira ticket.",
+             "user": {"login": "reviewer_carol"}, "created_at": "2026-05-14T15:45:00Z"},
+        ]
+
+        # Build file_comments from mock review comments — sort newest-first, use latest per file
+        from collections import defaultdict
+        rev_by_file = defaultdict(list)
+        for c in sorted(self.pr_review_comments,
+                        key=lambda x: x.get("updated_at") or x.get("created_at", ""),
+                        reverse=True):
+            path = c.get("path", "")
+            body = c.get("body", "").strip()
+            user = (c.get("user") or {}).get("login", "")
+            if path and body:
+                rev_by_file[path].append(f"{user}: {body}" if user else body)
+
         self.file_comments = []
+        for f in self.pr_files:
+            fname    = f["filename"]
+            comments = rev_by_file.get(fname, [])
+            jira_cmt = comments[0] if comments else ""
+            self.file_comments.append(dict(
+                filename=fname, status=f["status"],
+                additions=f["additions"], deletions=f["deletions"],
+                word_comment=jira_cmt, jira_comment=jira_cmt,
+                comment=jira_cmt, screenshots=[]))
 
         pr = self.pr_cache
         self.pr_info_var.set(
@@ -5631,11 +6393,43 @@ class App(tk.Tk):
         )
         if hasattr(self, "sql_btn"):
             self.sql_btn.config(state="normal")
-        if hasattr(self, "git_link") and "git_link" in self._field_widgets:
-            self._field_widgets["git_link"].set(pr["html_url"])
-        self._set_status("Mock data loaded — 4 SQL files (small / medium / big / deleted)")
+        if hasattr(self, "_gh_preview_btn"):
+            self._gh_preview_btn.config(state="normal")
+        # Auto-fill Jira Summary from PR title
+        jfw = getattr(self, "_jira_field_widgets", {})
+        if "summary" in jfw:
+            jfw["summary"].set(pr["title"])
+
+        # Auto-fill Description from PR body
+        pr_body = (pr.get("body") or "").strip()
+        if pr_body:
+            self.desc_text.delete("1.0", "end")
+            self.desc_text.config(fg=C["text"])
+            self.desc_text.insert("1.0", pr_body)
+
+        # Auto-fill Reporter from PR creator
+        if "reporter" in jfw:
+            jfw["reporter"].set(pr["user"]["login"])
+
+        # Auto-fill Assignee from first mock reviewer
+        if "assignee" in jfw:
+            jfw["assignee"].set("reviewer_alice")
+
+        self._set_status("Mock data loaded — 4 SQL files · 5 review comments · auto-filled summary, description, reporter & assignee")
 
     # ── Preview ───────────────────────────────────────────────────────────────
+
+    def _show_gh_preview(self):
+        if not self.pr_cache:
+            messagebox.showinfo("No PR", "Fetch a PR first.", parent=self)
+            return
+        GitHubPRPreviewPopup(
+            self,
+            pr=self.pr_cache,
+            files=self.pr_files,
+            review_comments=getattr(self, "pr_review_comments", []),
+            issue_comments=getattr(self, "pr_issue_comments", []),
+        )
 
     def _show_preview(self):
         fv = self._collect_fields()
@@ -5677,7 +6471,8 @@ class App(tk.Tk):
         out_dir = self.config_data.get("word_doc_output_dir", BASE_DIR)
         try:
             path = generate_word_doc(fv, self.config_data["fields"],
-                                     self.pr_cache, self.file_comments, out_dir)
+                                     self.pr_cache, self.file_comments, out_dir,
+                                     keyword_findings=getattr(self, "_sql_keyword_findings", {}))
         except Exception as e:
             self.after(0, lambda m=str(e): messagebox.showerror("Word Error", m))
             self.after(0, self.progress.stop); return
@@ -5718,47 +6513,51 @@ class App(tk.Tk):
         base_url = self.config_data.get("jira_base_url", "").rstrip("/")
         proj_key = self.config_data.get("jira_project_key", "")
 
-        # build ADF description
-        detail_bullets = []
-        for fd in self.config_data["fields"]:
-            if not fd.get("enabled", True): continue
-            if fd.get("jira_field"): continue
-            val = fv.get(fd["key"], "")
-            if val:
-                # show_label_in_jira: True → "Label: value", False → just "value"
-                show_lbl = fd.get("show_label_in_jira", True)
-                txt = f"{fd['label']}: {val}" if show_lbl else val
-                detail_bullets.append({
-                    "type": "listItem",
-                    "content": [{"type": "paragraph", "content": [
-                        {"type": "text", "text": txt}]}]
-                })
+        # build plain-text description (Jira REST API v2 — string, not ADF)
+        # order: description → changed files → issue details table
+        desc_lines = []
+        desc_lines.append(fv.get("description") or "")
 
-        fc_bullets = []
-        for fc in self.file_comments:
-            jira_cmt = (fc.get("jira_comment") or fc.get("comment", "")).strip()
-            txt = f"{STATUS_EMOJI.get(fc['status'],'~')} {fc['filename']}  [{fc['status'].upper()}]"
-            if jira_cmt:
-                txt += f"\n    {jira_cmt}"
-            fc_bullets.append({
-                "type": "listItem",
-                "content": [{"type": "paragraph",
-                             "content": [{"type": "text", "text": txt}]}]
-            })
+        changed_files = self._build_changed_files()
+        if changed_files:
+            desc_lines.append("")
+            desc_lines.append("h3. Changed Files")
+            for fn, status, jira_cmt, sql_cmt in changed_files:
+                line = f"{STATUS_EMOJI.get(status,'~')} {fn}  [{status.upper()}]"
+                if jira_cmt:
+                    line += f"\n  {jira_cmt}"
+                if sql_cmt:
+                    line += f"\n  SQL: {sql_cmt}"
+                desc_lines.append(f"* {line}")
 
-        adf = {"type": "doc", "version": 1, "content": [
-            {"type": "heading", "attrs": {"level": 3},
-             "content": [{"type": "text", "text": "Issue Details"}]},
-            {"type": "bulletList", "content": detail_bullets} if detail_bullets else
-            {"type": "paragraph", "content": [{"type": "text", "text": ""}]},
-            {"type": "heading", "attrs": {"level": 3},
-             "content": [{"type": "text", "text": "Description"}]},
-            {"type": "paragraph", "content": [
-                {"type": "text", "text": fv.get("description") or "No description."}]},
-        ] + ([{"type": "heading", "attrs": {"level": 3},
-               "content": [{"type": "text", "text": "Changed Files"}]},
-              {"type": "bulletList", "content": fc_bullets}]
-             if fc_bullets else [])}
+        include_details = getattr(self, "_include_in_desc_var", None)
+        include_details = include_details.get() if include_details else True
+        if include_details:
+            detail_rows = []
+            for fd in self.config_data["fields"]:
+                if not fd.get("enabled", True): continue
+                if fd.get("jira_field"): continue
+                if fd["key"] in ("doc_name", "doc_title"): continue
+                val = fv.get(fd["key"], "")
+                if val:
+                    detail_rows.append((fd["label"], val))
+            if detail_rows:
+                desc_lines.append("")
+                desc_lines.append("h3. Issue Details")
+                desc_lines.append("||Field||Value||")
+                for lbl, val in detail_rows:
+                    desc_lines.append(f"|{lbl}|{val}|")
+
+        # keyword findings from SQL generation
+        kw_findings = getattr(self, "_sql_keyword_findings", {})
+        if kw_findings:
+            desc_lines.append("")
+            desc_lines.append("h3. ⚠ Keyword Findings (Test Cases)")
+            desc_lines.append("||File||Keywords Found||")
+            for fn, kws in kw_findings.items():
+                desc_lines.append(f"|{fn}|{', '.join(kws)}|")
+
+        description = "\n".join(desc_lines)
 
         type_map = {"Bug":"Bug","Enhancement":"Story","Task":"Task",
                     "Story":"Story","Epic":"Epic","Sub-task":"Sub-task","Incident":"Bug"}
@@ -5768,29 +6567,41 @@ class App(tk.Tk):
             "project":     {"key": fv.get("project") or proj_key},
             "summary":     fv.get("summary") or "(no summary)",
             "issuetype":   {"name": issue_type},
-            "description": adf,
+            "description": description,
         }}
 
         if fv.get("reporter"):
             payload["fields"]["reporter"] = {"name": fv["reporter"]}
 
-        # description-only fields that have jira_key → send to API directly
-        _MULTI = {"components", "fixVersions", "labels"}
-        _NAME  = {"priority", "issuetype"}
+        # additional enabled Jira API fields (beyond the 4 core hardcoded above)
+        _CORE_KEYS  = {"project", "summary", "issue_type", "reporter"}
+        _MULTI_OBJ  = {"components", "fixVersions", "versions"}
+        _MULTI_STR  = {"labels"}
+        _NAME_FIELDS= {"priority", "issuetype", "assignee"}
         for fd in self.config_data["fields"]:
-            if fd.get("jira_field"): continue
-            jk = fd.get("jira_key")
-            if not jk: continue
+            if not fd.get("jira_field"):         continue
+            if not fd.get("enabled", True):      continue
+            if fd["key"] in _CORE_KEYS:          continue
+            jk  = fd.get("jira_key")
+            if not jk:                           continue
             val = fv.get(fd["key"], "").strip()
-            if not val: continue
-            if jk in _MULTI:
-                payload["fields"][jk] = [{"name": val}]
-            elif jk in _NAME:
+            if not val:                          continue
+            if jk in _MULTI_OBJ:
+                payload["fields"][jk] = [{"name": v.strip()} for v in val.split(",") if v.strip()]
+            elif jk in _MULTI_STR:
+                payload["fields"][jk] = [v.strip() for v in val.split(",") if v.strip()]
+            elif jk in _NAME_FIELDS:
                 payload["fields"][jk] = {"name": val}
+            elif fd.get("type") == "number":
+                try:
+                    payload["fields"][jk] = float(val) if "." in val else int(val)
+                except ValueError:
+                    payload["fields"][jk] = val
             else:
                 payload["fields"][jk] = val
 
-        hdrs   = jira_auth_headers(email, jira_tok)
+        method = self.config_data.get("jira_auth_method", "basic")
+        hdrs   = jira_auth_headers(email, jira_tok, method)
         verify = _jira_ssl_verify(self.config_data)
         try:
             resp = requests.post(f"{base_url}/issue",
@@ -5807,71 +6618,152 @@ class App(tk.Tk):
 
         issue_key = data.get("key", "")
         issue_url = f"{base_url}/browse/{issue_key}"
-        self._jira_url = issue_url
+        self._jira_url       = issue_url
+        self._last_issue_key = issue_key
 
-        # save to recent tickets
-        fv_summary = fv.get("summary", "")[:60]
-        recent = self.config_data.setdefault("recent_tickets", [])
-        recent.insert(0, {
-            "key":   issue_key,
-            "url":   issue_url,
-            "title": fv_summary,
-            "date":  datetime.now().strftime("%Y-%m-%d"),
-        })
-        self.config_data["recent_tickets"] = recent[:10]
-        save_config(self.config_data)
-        self.after(0, self._refresh_recent_panel)
+        # auto-save issue details field values as last-used defaults
+        save_field_values({k: v.get() for k, v in getattr(self, "_field_widgets", {}).items()})
 
-        # generate word doc
-        doc_path = None
+        # generate Word doc now (so it's ready when user clicks Attach)
         try:
             doc_path = generate_word_doc(fv, self.config_data["fields"],
                                          self.pr_cache, self.file_comments,
-                                         self.config_data.get("word_doc_output_dir", BASE_DIR))
+                                         self.config_data.get("word_doc_output_dir", BASE_DIR),
+                                         keyword_findings=getattr(self, "_sql_keyword_findings", {}))
             self._last_doc_path = doc_path
         except Exception:
             pass
 
-        def _attach_file(path, mime):
-            try:
-                ah = jira_auth_headers(email, jira_tok)
-                ah["X-Atlassian-Token"] = "no-check"
-                ah.pop("Content-Type", None)
-                with open(path, "rb") as fh:
-                    requests.post(
-                        f"{base_url}/issue/{issue_key}/attachments",
-                        headers=ah,
-                        files={"file": (os.path.basename(path), fh, mime)},
-                        timeout=30, verify=verify)
-            except Exception:
-                pass
-
-        # attach word doc
-        if doc_path:
-            _attach_file(doc_path,
-                         "application/vnd.openxmlformats-officedocument"
-                         ".wordprocessingml.document")
-
-        # attach SQL file if generated
-        sql_path = self._last_sql_path
-        if sql_path and os.path.exists(sql_path):
-            _attach_file(sql_path, "text/plain")
-
-        attached = []
-        if doc_path:   attached.append(os.path.basename(doc_path))
-        if sql_path and os.path.exists(sql_path):
-            attached.append(os.path.basename(sql_path))
-
         def _done():
             self.progress.stop()
             self.result_var.set(f"  Ticket created: {issue_key}   Click to open in Jira")
-            self._set_status(f"Ticket {issue_key} created successfully")
-            attach_note = ("\n\nAttached: " + ", ".join(attached)) if attached else ""
+            self._set_status(f"Ticket {issue_key} created — click Attach Files to upload docs")
+            pr_note = f"\n\nLinked PR: #{pr['number']} — {pr.get('title','')[:40]}" \
+                      if pr.get("number") else ""
             messagebox.showinfo("Ticket Created",
-                f"Jira ticket created!\n\n{issue_key}\n{issue_url}{attach_note}")
+                f"Jira ticket created!\n\n{issue_key}\n{issue_url}{pr_note}"
+                f"\n\nUse 'Attach Files to Ticket' button to upload Word doc / SQL file.")
+            if hasattr(self, "_attach_btn"):
+                self._attach_btn.configure(
+                    state="normal",
+                    text=f"⊞  Attach Files to {issue_key}")
+        self.after(0, _done)
+
+    # ── Attach files to existing ticket ──────────────────────────────────────
+
+    def _attach_files_thread(self):
+        threading.Thread(target=self._attach_files_to_jira, daemon=True).start()
+
+    def _attach_files_to_jira(self):
+        issue_key = self._last_issue_key
+        if not issue_key:
+            self.after(0, lambda: messagebox.showerror(
+                "No Ticket", "No ticket created yet in this session."))
+            return
+
+        cfg      = self.config_data
+        tok_file = cfg.get("jira_token_file", "")
+        email    = cfg.get("jira_email", "").strip()
+        base_url = cfg.get("jira_base_url", "").rstrip("/")
+        method   = cfg.get("jira_auth_method", "basic")
+        verify   = _jira_ssl_verify(cfg)
+
+        try:
+            jira_tok = read_token(tok_file)
+        except Exception as e:
+            self.after(0, lambda m=str(e): messagebox.showerror("Token Error", m))
+            return
+
+        do_word = getattr(self._attach_word_var, "get", lambda: True)()
+        do_sql  = getattr(self._attach_sql_var,  "get", lambda: True)()
+
+        if not do_word and not do_sql:
+            self.after(0, lambda: messagebox.showwarning(
+                "Nothing Selected",
+                "Select at least one file type to attach\n(Word Doc or SQL File)."))
+            return
+
+        self.after(0, self.progress.start)
+        self.after(0, lambda: self._set_status(f"Attaching files to {issue_key}..."))
+
+        def _post_file(path, mime):
+            ah = jira_auth_headers(email, jira_tok, method)
+            ah["X-Atlassian-Token"] = "no-check"
+            ah.pop("Content-Type", None)
+            with open(path, "rb") as fh:
+                r = requests.post(
+                    f"{base_url}/issue/{issue_key}/attachments",
+                    headers=ah,
+                    files={"file": (os.path.basename(path), fh, mime)},
+                    timeout=30, verify=verify)
+            r.raise_for_status()
+
+        attached = []
+        errors   = []
+
+        if do_word:
+            doc_path = self._last_doc_path
+            if doc_path and os.path.exists(doc_path):
+                try:
+                    _post_file(doc_path,
+                               "application/vnd.openxmlformats-officedocument"
+                               ".wordprocessingml.document")
+                    attached.append(os.path.basename(doc_path))
+                except Exception as e:
+                    errors.append(f"Word doc: {e}")
+            else:
+                errors.append("Word doc not found — generate it first via 'Generate Word Doc'.")
+
+        if do_sql:
+            sql_path = self._last_sql_path
+            if sql_path and os.path.exists(sql_path):
+                try:
+                    _post_file(sql_path, "text/plain")
+                    attached.append(os.path.basename(sql_path))
+                except Exception as e:
+                    errors.append(f"SQL file: {e}")
+            else:
+                errors.append("SQL file not found — generate it first via 'SQL PR File'.")
+
+        def _done():
+            self.progress.stop()
+            if attached:
+                self._set_status(f"Attached {len(attached)} file(s) to {issue_key}")
+                self._attach_btn.configure(
+                    text=f"✓  Attached to {issue_key}", state="disabled")
+            msg = ""
+            if attached:
+                msg += f"Attached to {issue_key}:\n" + "\n".join(f"  • {a}" for a in attached)
+            if errors:
+                msg += ("\n\n" if msg else "") + "Errors:\n" + "\n".join(f"  • {e}" for e in errors)
+            if msg:
+                (messagebox.showinfo if attached else messagebox.showerror)(
+                    "Attach Files", msg)
         self.after(0, _done)
 
     # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _build_changed_files(self):
+        """Return list of (filename, status, jira_comment, sql_comment) for all changed files.
+        Merges file_comments (from word doc flow) and _sql_file_comments (from SQL popup)."""
+        sql_cmts  = getattr(self, "_sql_file_comments", {})
+        fc_by_name = {fc["filename"]: fc for fc in self.file_comments}
+
+        # ordered unique filenames: file_comments order first, then any SQL-only files
+        all_fnames = list(dict.fromkeys(
+            [fc["filename"] for fc in self.file_comments] + list(sql_cmts.keys())
+        ))
+
+        rows = []
+        pr_status = {pf["filename"]: pf.get("status", "modified")
+                     for pf in getattr(self, "pr_files", [])}
+        for fn in all_fnames:
+            fc        = fc_by_name.get(fn, {})
+            status    = fc.get("status") or pr_status.get(fn, "modified")
+            jira_cmt  = (fc.get("jira_comment") or fc.get("comment", "")).strip()
+            sql_cmt   = sql_cmts.get(fn, "")
+            rows.append((fn, status, jira_cmt, sql_cmt))
+        return rows
 
     def _collect_fields(self):
         fv = {}
